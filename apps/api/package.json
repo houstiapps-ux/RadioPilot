@@ -1,5 +1,14 @@
 {
-  "name": "api",
+  "name": "@radio-pilot/api",
   "private": true,
-  "version": "0.0.0"
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@radio-pilot/shared": "workspace:*",
+    "fastify": "^5.6.1",
+    "redis": "^5.8.2"
+  }
 }
