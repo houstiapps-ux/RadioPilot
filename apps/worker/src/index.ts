@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 import {
+  type Band,
   parseDxClusterLine,
   type ActivationRecord,
   type ParsedSpot,
+  type PskBandWindowSummary,
   type PskReporterSummary,
   type SolarConditions,
 } from "@radio-pilot/shared";
@@ -286,6 +288,9 @@ function startPskReporterPolling(): void {
     onSummary: async (summary) => {
       await persistPskReporterSummary(summary);
     },
+    onBandWindows: async (windows) => {
+      await persistPskReporterBandWindows(windows.current, windows.previous);
+    },
     onDirectionalCounts: async (counts) => {
       await persistPskReporterDirectionalCounts(counts);
     },
@@ -387,6 +392,23 @@ async function persistPskReporterDirectionalCounts(
     for (const [direction, value] of Object.entries(bandCounts)) {
       writes.push(redis.set(`psk:band:${band}:dir:${direction}`, String(value)));
     }
+  }
+
+  await Promise.all(writes);
+}
+
+async function persistPskReporterBandWindows(
+  current: ReadonlyMap<Band, PskBandWindowSummary>,
+  previous: ReadonlyMap<Band, PskBandWindowSummary>,
+): Promise<void> {
+  const writes: Promise<unknown>[] = [];
+
+  for (const [band, windowSummary] of current.entries()) {
+    writes.push(redis.set(`psk:band:${band}:current`, JSON.stringify(windowSummary)));
+  }
+
+  for (const [band, windowSummary] of previous.entries()) {
+    writes.push(redis.set(`psk:band:${band}:previous`, JSON.stringify(windowSummary)));
   }
 
   await Promise.all(writes);

@@ -4,6 +4,7 @@ import {
   lookupBand,
   parseMaidenheadLocator,
   type Band,
+  type PskBandWindowSummary,
   type PskReporterReport,
   type PskReporterSummary,
 } from "@radio-pilot/shared";
@@ -41,6 +42,10 @@ export interface PskReporterMqttHandle {
 interface PskReporterMqttOptions {
   readonly windowMinutes?: number;
   readonly onSummary: (summary: PskReporterSummary) => Promise<void> | void;
+  readonly onBandWindows?: (windows: {
+    current: ReadonlyMap<Band, PskBandWindowSummary>;
+    previous: ReadonlyMap<Band, PskBandWindowSummary>;
+  }) => Promise<void> | void;
   readonly onDirectionalCounts?: (counts: PskReporterDirectionalCounts) => Promise<void> | void;
   readonly onMetrics?: (metrics: PskReporterWorkerMetrics) => Promise<void> | void;
   readonly onDiagnostic?: (event: string, details: Record<string, unknown>) => void;
@@ -250,6 +255,7 @@ async function flushSummary(
     messagesLast10s: diagnostics.recentMessageTimes.length,
     updatedAt: new Date(now).toISOString(),
   });
+  await options.onBandWindows?.(buildPskBandWindowsFromReports(recentReports, now, windowMinutes));
   if (referenceGrid) {
     await options.onDirectionalCounts?.(sumDirectionalAggregation(directionalAggregation));
     rotateDirectionalAggregation(directionalAggregation);
@@ -549,6 +555,72 @@ function countPaths(reports: readonly PskReporterReport[]): Record<string, numbe
   }
 
   return counts;
+}
+
+function buildPskBandWindowsFromReports(
+  reports: readonly PskReporterReport[],
+  now: number,
+  windowMinutes: number,
+): {
+  current: ReadonlyMap<Band, PskBandWindowSummary>;
+  previous: ReadonlyMap<Band, PskBandWindowSummary>;
+} {
+  const windowMs = windowMinutes * 60 * 1000;
+  const currentWindowStart = now - windowMs;
+  const previousWindowStart = currentWindowStart - windowMs;
+  const currentReports = reports.filter((report) => {
+    const observedAt = Date.parse(report.observedAt);
+    return Number.isFinite(observedAt) && observedAt >= currentWindowStart && observedAt <= now;
+  });
+  const previousReports = reports.filter((report) => {
+    const observedAt = Date.parse(report.observedAt);
+    return Number.isFinite(observedAt) && observedAt >= previousWindowStart && observedAt < currentWindowStart;
+  });
+
+  return {
+    current: summarizeReportsByBand(currentReports, now),
+    previous: summarizeReportsByBand(previousReports, now),
+  };
+}
+
+function summarizeReportsByBand(
+  reports: readonly PskReporterReport[],
+  now: number,
+): ReadonlyMap<Band, PskBandWindowSummary> {
+  const grouped = new Map<Band, PskReporterReport[]>();
+
+  for (const report of reports) {
+    if (!report.band) {
+      continue;
+    }
+
+    const existing = grouped.get(report.band);
+
+    if (existing) {
+      existing.push(report);
+    } else {
+      grouped.set(report.band, [report]);
+    }
+  }
+
+  const summary = new Map<Band, PskBandWindowSummary>();
+
+  for (const band of supportedBands) {
+    const bandReports = grouped.get(band) ?? [];
+
+    summary.set(band, {
+      count: bandReports.length,
+      uniqueCalls: new Set(bandReports.map((report) => report.senderCallsign)).size,
+      uniqueGrids: new Set(bandReports.map((report) => report.senderLocator)).size,
+      modes: {
+        FT8: bandReports.filter((report) => report.mode === "FT8").length,
+        FT4: bandReports.filter((report) => report.mode === "FT4").length,
+      },
+      updatedAt: now,
+    });
+  }
+
+  return summary;
 }
 
 function latestObservedAt(reports: readonly PskReporterReport[]): string | undefined {

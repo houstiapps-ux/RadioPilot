@@ -93,6 +93,24 @@ export interface PskReporterSummary {
   readonly bands: readonly PskReporterBandSummary[];
 }
 
+export interface PskBandWindowSummary {
+  readonly count: number;
+  readonly uniqueCalls: number;
+  readonly uniqueGrids: number;
+  readonly modes: Readonly<Record<"FT8" | "FT4", number>>;
+  readonly updatedAt: number;
+}
+
+export interface PskBandTrend {
+  readonly trend: "rising" | "steady" | "falling";
+  readonly volumeDelta: number;
+  readonly uniqueCallDelta: number;
+  readonly gridDelta: number;
+  readonly confidence: "High" | "Medium" | "Low";
+}
+
+export type PskBandTrendMap = Readonly<Partial<Record<Band, PskBandTrend>>>;
+
 export interface OpportunitySnapshot {
   readonly generatedAt: string;
   readonly cards: readonly OpportunityCard[];

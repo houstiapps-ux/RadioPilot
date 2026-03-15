@@ -6,8 +6,10 @@ import Fastify from "fastify";
 import {
   buildOpportunitySnapshot,
   buildOpportunitySnapshotWithDebug,
+  getAllBandTrends,
   parseMaidenheadLocator,
   parseStoredOpportunitySpot,
+  type PskBandTrendMap,
   type PskReporterSummary,
   type SolarConditions,
   type OpportunitySnapshot,
@@ -102,6 +104,7 @@ app.get("/debug/psk", async () => {
   const summary = parseJson(rawSummary ?? "");
   const metrics = parsePskMetrics(rawMetrics);
   const lastRedisWriteSecondsAgo = getSecondsAgo(freshness);
+  const trends = await getAllBandTrends(redis);
 
   return {
     mqttConnected: metrics?.mqttConnected ?? false,
@@ -109,6 +112,8 @@ app.get("/debug/psk", async () => {
     activeBands: getActivePskBands(summary),
     lastRedisWriteSecondsAgo,
     summary: summary ?? {},
+    freshness,
+    trends,
   };
 });
 
@@ -287,10 +292,11 @@ async function buildPersonalizedSnapshotDebug(
   const homeGrid = getHomeGridFromQuery(query);
   const operatingStyle = getOperatingStyleFromQuery(query);
   const now = Date.now();
-  const [rawSpots, rawSolar, rawPsk] = await Promise.all([
+  const [rawSpots, rawSolar, rawPsk, pskTrends] = await Promise.all([
     redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
     redis.get("solar:latest"),
     redis.get("psk:summary"),
+    getAllBandTrends(redis),
   ]);
   const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
   const solar = parseSolar(rawSolar);
@@ -322,6 +328,7 @@ async function buildPersonalizedSnapshotDebug(
     homeGrid,
     operatingStyle,
     pskSummary: isFreshPskSummary(pskSummary, now) ? pskSummary : null,
+    pskTrends: filterFreshPskTrends(pskTrends, now),
   });
   const snapshot = {
     ...built.snapshot,
@@ -338,6 +345,13 @@ function isFreshPskSummary(summary: PskReporterSummary | null, now: number): boo
 
   const freshness = Date.parse(summary.freshnessTimestamp);
   return Number.isFinite(freshness) && freshness >= now - RECENT_WINDOW_MS * 2;
+}
+
+function filterFreshPskTrends(
+  trends: PskBandTrendMap,
+  _now: number,
+): PskBandTrendMap {
+  return trends;
 }
 
 function renderIndexPage(): string {

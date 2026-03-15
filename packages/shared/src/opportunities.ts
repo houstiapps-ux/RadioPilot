@@ -7,6 +7,7 @@ import type {
   OpportunityCard,
   OpportunitySnapshot,
   ParsedSpot,
+  PskBandTrendMap,
   PskReporterSummary,
 } from "./types.js";
 
@@ -17,6 +18,7 @@ interface BuildOpportunitySnapshotOptions {
   readonly homeGrid?: string;
   readonly operatingStyle?: string;
   readonly pskSummary?: PskReporterSummary | null;
+  readonly pskTrends?: PskBandTrendMap | null;
 }
 
 export interface StoredOpportunitySpot extends ParsedSpot {
@@ -46,6 +48,8 @@ interface BandStats {
   readonly pskTrendRising: boolean;
   readonly pskBandBoostApplied: boolean;
   readonly pskModeBoostApplied: boolean;
+  readonly pskTrendLabel: "rising" | "steady" | "falling";
+  readonly pskTrendConfidence: "High" | "Medium" | "Low" | null;
   readonly spots: readonly StoredOpportunitySpot[];
   readonly modeFamilyCounts: Readonly<Record<ModeFamilyKey, number>>;
   readonly representative: StoredOpportunitySpot;
@@ -56,6 +60,7 @@ export interface OpportunityDebugBand {
   readonly pskCurrent: number;
   readonly pskPrevious: number;
   readonly pskBoostApplied: boolean;
+  readonly pskTrend?: "rising" | "steady" | "falling";
 }
 
 export interface OpportunityDebugSnapshot {
@@ -90,6 +95,7 @@ export function buildOpportunitySnapshotWithDebug(
     : undefined;
   const normalizedOperatingStyle = normalizeOperatingStyle(options.operatingStyle);
   const pskByBand = indexPskSummaryByBand(options.pskSummary);
+  const pskTrends = options.pskTrends ?? {};
   const currentSpots = allSpots.filter((spot) => {
     const spotTime = getSpotSortTime(spot);
     return spotTime >= currentWindowStart && spotTime <= now;
@@ -104,6 +110,7 @@ export function buildOpportunitySnapshotWithDebug(
     normalizedHomeContinent ?? null,
     normalizedHomeGrid,
     pskByBand,
+    pskTrends,
   );
   const rankedBands = statsByBand
     .map((stats) => ({ stats, card: createOpportunityCard(stats, stats.representative, normalizedHomeGrid) }))
@@ -161,6 +168,7 @@ export function buildOpportunitySnapshotWithDebug(
       pskCurrent: stats.pskCurrent,
       pskPrevious: stats.pskPrevious,
       pskBoostApplied: stats.pskBandBoostApplied || stats.pskModeBoostApplied,
+      pskTrend: stats.pskTrendLabel,
     })),
   };
 }
@@ -218,6 +226,7 @@ function buildBandStats(
   homeContinent: string | null,
   homeGrid: string | undefined,
   pskByBand: ReadonlyMap<string, PskBandSummary>,
+  pskTrends: PskBandTrendMap,
 ): BandStats[] {
   const bands = new Map<string, StoredOpportunitySpot[]>();
   const previousCounts = new Map<string, number>();
@@ -250,6 +259,7 @@ function buildBandStats(
     const dominantModeFamily = getDominantModeFamily(modeFamilyCounts);
     const dominantDxContinent = getDominantDxContinent(bandSpots);
     const pskBand = pskByBand.get(bandKey) ?? emptyPskBandSummary();
+    const pskTrend = pskTrends[bandKey as keyof PskBandTrendMap] ?? null;
     const roughRegionLabel = getRoughRegionLabel(
       dominantDxContinent,
       directionalCluster.dominantDirection,
@@ -287,6 +297,8 @@ function buildBandStats(
         pskBand.modeCounts,
         dominantModeFamily,
       ),
+      pskTrendLabel: pskTrend?.trend ?? "steady",
+      pskTrendConfidence: pskTrend?.confidence ?? null,
       spots: bandSpots,
       modeFamilyCounts,
       representative: selectRepresentativeSpot(bandSpots),
@@ -379,6 +391,10 @@ function compareWatchNextBandStats(
 
   if (right.pskCurrent !== left.pskCurrent) {
     return right.pskCurrent - left.pskCurrent;
+  }
+
+  if (left.pskTrendLabel !== right.pskTrendLabel) {
+    return compareTrendLabel(right.pskTrendLabel) - compareTrendLabel(left.pskTrendLabel);
   }
 
   if (right.activityTrend !== left.activityTrend) {
@@ -696,6 +712,17 @@ function buildCardSummary(stats: BandStats): string {
   }
 
   summaryParts.push(`${formatModeFamily(stats.dominantModeFamily)} likely good`);
+
+  if (stats.pskTrendLabel === "rising") {
+    summaryParts.push(
+      stats.pskTrendConfidence === "High"
+        ? `${stats.bandKey} activity rising`
+        : `${stats.bandKey} digital grids increasing`,
+    );
+  } else if (stats.pskTrendLabel === "falling") {
+    summaryParts.push(`${stats.bandKey} stable but no longer rising`);
+  }
+
   return summaryParts.join(", ");
 }
 
@@ -867,6 +894,12 @@ function getPskScoreBoost(stats: BandStats): number {
 
   if (stats.pskTrendRising) {
     score += 12;
+  }
+
+  if (stats.pskTrendLabel === "rising") {
+    score += 10;
+  } else if (stats.pskTrendLabel === "falling") {
+    score -= 14;
   }
 
   if (stats.pskModeBoostApplied) {
@@ -1049,6 +1082,18 @@ function emptyPskBandSummary(): PskBandSummary {
     rising: false,
     modeCounts: {},
   };
+}
+
+function compareTrendLabel(value: "rising" | "steady" | "falling"): number {
+  if (value === "rising") {
+    return 2;
+  }
+
+  if (value === "steady") {
+    return 1;
+  }
+
+  return 0;
 }
 
 function shouldApplyPskModeBoost(
