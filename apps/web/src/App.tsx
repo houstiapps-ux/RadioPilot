@@ -22,6 +22,14 @@ type OpportunityCard = {
   confidence?: "Low" | "Medium" | "High";
 };
 
+type SolarData = {
+  sfi: string;
+  kp: string;
+  muf: string;
+  aIndex?: string;
+  updatedAt?: string;
+};
+
 type OpportunitySnapshot = {
   generatedAt: string;
   cards: readonly OpportunityCard[];
@@ -29,22 +37,14 @@ type OpportunitySnapshot = {
   watchNext: readonly OpportunityCard[];
   dxOpportunity: OpportunityCard | null;
   nearbyActivity: readonly OpportunityCard[];
-};
-
-type SolarData = {
-  sfi: string;
-  kp: string;
-  aIndex: string;
-  muf: string;
+  solar?: SolarData | null;
 };
 
 type LoadState = "loading" | "success" | "error";
 type PanelTone = "best" | "watch" | "dx" | "nearby";
 
 const opportunitiesUrl = "http://localhost:3000/api/opportunities";
-const solarUrl = "https://www.hamqsl.com/solarxml.php";
 const opportunityPollIntervalMs = 30_000;
-const solarPollIntervalMs = 10 * 60 * 1000;
 const portableTags = new Set(["SOTA", "POTA", "WWFF", "/P"]);
 const modeTags = new Set(["CW", "SSB", "FT8", "FT4"]);
 const countryDisplayNames = typeof Intl.DisplayNames === "function"
@@ -59,7 +59,6 @@ export function App() {
   const [snapshot, setSnapshot] = useState<OpportunitySnapshot | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [settings, setSettings] = useState(loadOperatorSettings);
-  const [solarData, setSolarData] = useState<SolarData | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -105,45 +104,8 @@ export function App() {
     };
   }, [settings]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let intervalId: number | undefined;
-
-    async function loadSolarData() {
-      try {
-        const response = await fetch(solarUrl);
-
-        if (!response.ok) {
-          throw new Error(`Solar request failed with status ${response.status}`);
-        }
-
-        const xml = await response.text();
-        const parsed = parseSolarData(xml);
-
-        if (!cancelled) {
-          setSolarData(parsed);
-        }
-      } catch {
-        if (!cancelled) {
-          setSolarData(null);
-        }
-      }
-    }
-
-    void loadSolarData();
-    intervalId = window.setInterval(() => {
-      void loadSolarData();
-    }, solarPollIntervalMs);
-
-    return () => {
-      cancelled = true;
-      if (intervalId !== undefined) {
-        window.clearInterval(intervalId);
-      }
-    };
-  }, []);
-
   const stationLine = useMemo(() => formatStationLine(settings), [settings]);
+  const solarData = snapshot?.solar ?? null;
 
   return (
     <main className="dashboard-shell">
@@ -175,10 +137,10 @@ export function App() {
           </div>
           <StatusPill state={loadState} />
         </div>
+      </section>
 
-        <div className="solar-card">
-          <SolarPanel data={solarData} />
-        </div>
+      <section className="solar-card">
+        <SolarPanel data={solarData} />
       </section>
 
       {settingsOpen ? (
@@ -310,15 +272,17 @@ function StatusPill(props: { state: LoadState }) {
 }
 
 function SolarPanel(props: { data: SolarData | null }) {
+  const updatedLabel = formatSolarUpdatedAt(props.data?.updatedAt);
+
   return (
     <>
       <div className="solar-card-header">
         <div>
           <span className="strip-label">Solar</span>
-          <div className="solar-title">Propagation instruments</div>
+          <div className="solar-title">Propagation Conditions</div>
         </div>
         <div className="solar-status">
-          {props.data ? "Live solar data" : "Calm placeholder"}
+          {props.data ? "Live solar data" : "Solar data unavailable"}
         </div>
       </div>
 
@@ -329,12 +293,13 @@ function SolarPanel(props: { data: SolarData | null }) {
           min={60}
           max={220}
           bands={[
-            { stop: 0.28, className: "gauge-band-weak" },
-            { stop: 0.62, className: "gauge-band-fair" },
+            { stop: 0.22, className: "gauge-band-poor" },
+            { stop: 0.46, className: "gauge-band-fair" },
+            { stop: 0.74, className: "gauge-band-good" },
             { stop: 1, className: "gauge-band-strong" },
           ]}
-          rangeLabel="Weak to strong"
-          idleLabel="No flux data"
+          rangeLabel="Poor to strong"
+          idleLabel="Solar data unavailable"
         />
 
         <GaugeMetric
@@ -344,24 +309,23 @@ function SolarPanel(props: { data: SolarData | null }) {
           max={9}
           bands={[
             { stop: 0.34, className: "gauge-band-quiet" },
-            { stop: 0.67, className: "gauge-band-restless" },
-            { stop: 1, className: "gauge-band-disturbed" },
+            { stop: 0.72, className: "gauge-band-disturbed" },
+            { stop: 1, className: "gauge-band-stormy" },
           ]}
-          rangeLabel="Quiet to disturbed"
-          idleLabel="No Kp data"
-        />
-
-        <SolarReading
-          label="A-index"
-          value={props.data?.aIndex ?? "No data"}
-          hint={props.data ? "Geomagnetic background" : "Awaiting feed"}
+          rangeLabel="Quiet to stormy"
+          idleLabel="Solar data unavailable"
         />
 
         <SolarReading
           label="MUF"
-          value={props.data?.muf ?? "No data"}
-          hint={props.data ? "Estimated upper usable freq" : "Awaiting feed"}
+          value={props.data?.muf?.trim() ? props.data.muf : "—"}
+          hint={props.data ? "Estimated upper usable freq" : "Solar data unavailable"}
         />
+      </div>
+
+      <div className="solar-secondary">
+        <span>A-index {props.data?.aIndex?.trim() ? props.data.aIndex : "—"}</span>
+        <span>Updated {updatedLabel}</span>
       </div>
     </>
   );
@@ -410,9 +374,7 @@ function GaugeMetric(props: {
         <circle className="solar-gauge-cap" cx="80" cy="86" r="4.5" />
       </svg>
 
-      <div className="solar-gauge-value">
-        {hasValue ? formatSolarNumber(numericValue) : "No data"}
-      </div>
+      <div className="solar-gauge-value">{hasValue ? formatSolarNumber(numericValue) : "—"}</div>
       <div className="solar-gauge-status">
         {hasValue ? props.rangeLabel : props.idleLabel}
       </div>
@@ -474,12 +436,12 @@ function OperatorCard(props: {
         <div>
           <div className="operator-band">{view.band}</div>
           <div className="operator-target">{view.primaryLine}</div>
+          <div className="operator-subline">{view.country}</div>
         </div>
         <div className="operator-frequency">{formatFrequency(props.card.frequencyKHz)}</div>
       </div>
 
       <div className="operator-meta-grid">
-        <MetaLine label="Country" value={view.country} />
         <MetaLine label="Direction" value={view.directionLine} />
         <MetaLine label="Beam" value={view.beamHeading} />
         <MetaLine label="Modes" value={view.suggestedModes} />
@@ -530,11 +492,21 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   const heading = direction ? `${direction.degrees}°` : "Unavailable";
   const suggestedModes = getSuggestedModes(card);
   const confidence = getConfidence(card.score);
+  const callsign = safeText(
+    card.callsign,
+    tone === "watch"
+      ? "Activity rising"
+      : tone === "dx"
+        ? "DX target"
+        : tone === "nearby"
+          ? "Portable activity"
+          : "Best path",
+  );
 
   if (tone === "watch") {
     return {
       band: safeText(card.band, "Unknown band"),
-      primaryLine: direction ? `Toward ${direction.label}` : safeText(card.callsign, "Activity rising"),
+      primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine: direction ? direction.label : "Trend building",
       beamHeading: heading,
@@ -548,7 +520,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   if (tone === "dx") {
     return {
       band: safeText(card.band, "Unknown band"),
-      primaryLine: safeText(card.callsign, "DX target"),
+      primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine: direction ? direction.label : "Direction unavailable",
       beamHeading: heading,
@@ -562,7 +534,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   if (tone === "nearby") {
     return {
       band: safeText(card.band, "Unknown band"),
-      primaryLine: safeText(card.callsign, "Portable activity"),
+      primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine: direction ? direction.label : "Nearby path unavailable",
       beamHeading: heading,
@@ -575,7 +547,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
 
   return {
     band: safeText(card.band, "Unknown band"),
-    primaryLine: direction ? `${direction.label} (${heading})` : safeText(card.callsign, "Best path"),
+    primaryLine: callsign,
     country: formatCountry(card.countryCode),
     directionLine: direction ? direction.label : "Direction unavailable",
     beamHeading: heading,
@@ -638,30 +610,8 @@ function formatStationLine(settings: OperatorSettings): string {
   return `Location: ${grid} | HF/VHF`;
 }
 
-function parseSolarData(xml: string): SolarData {
-  const document = new DOMParser().parseFromString(xml, "text/xml");
-
-  return {
-    sfi: readSolarValue(document, ["solarflux", "solarfluxindex", "sfi"]),
-    kp: readSolarValue(document, ["kindex", "kp"]),
-    aIndex: readSolarValue(document, ["aindex", "a-index", "aindexindex"]),
-    muf: readSolarValue(document, ["muf"]),
-  };
-}
-
-function readSolarValue(document: Document, tags: readonly string[]): string {
-  for (const tag of tags) {
-    const value = document.querySelector(tag)?.textContent?.trim();
-    if (value) {
-      return value;
-    }
-  }
-
-  return "No data";
-}
-
 function parseSolarNumber(value: string | undefined): number | null {
-  if (!value || value === "No data") {
+  if (!value || value === "—") {
     return null;
   }
 
@@ -746,7 +696,7 @@ function safeText(value: string | null | undefined, fallback: string): string {
 
 function formatCountry(countryCode: string | undefined): string {
   if (!countryCode) {
-    return "Unavailable";
+    return "—";
   }
 
   try {
@@ -755,6 +705,23 @@ function formatCountry(countryCode: string | undefined): string {
   } catch {
     return countryCode.toUpperCase();
   }
+}
+
+function formatSolarUpdatedAt(value: string | undefined): string {
+  if (!value) {
+    return "—";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : "—";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 const directionMap = {

@@ -7,6 +7,7 @@ import {
   buildOpportunitySnapshot,
   parseMaidenheadLocator,
   parseStoredOpportunitySpot,
+  type SolarConditions,
   type OpportunitySnapshot,
 } from "@radio-pilot/shared";
 import { createClient } from "redis";
@@ -33,6 +34,7 @@ const emptySnapshot = (): OpportunitySnapshot => ({
   watchNext: [],
   dxOpportunity: null,
   nearbyActivity: [],
+  solar: null,
 });
 
 await redis.connect();
@@ -71,12 +73,24 @@ app.get("/api/opportunities", async (request) => {
   const homeGrid = getHomeGridFromQuery(request.query);
   const operatingStyle = getOperatingStyleFromQuery(request.query);
   const now = Date.now();
-  const rawSpots = await redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now);
+  const [rawSpots, rawSolar] = await Promise.all([
+    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
+    redis.get("solar:latest"),
+  ]);
   const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
+  const solar = parseSolar(rawSolar);
 
-  return spots.length > 0
-    ? buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle })
-    : emptySnapshot();
+  if (spots.length === 0) {
+    return {
+      ...emptySnapshot(),
+      solar,
+    };
+  }
+
+  return {
+    ...buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle }),
+    solar,
+  };
 });
 
 app.get("/debug/recent-spots", async () => {
@@ -101,6 +115,34 @@ function parseSnapshot(value: string | null): OpportunitySnapshot | null {
   } catch {
     return null;
   }
+}
+
+function parseSolar(value: string | null): SolarConditions | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<SolarConditions>;
+
+    if (
+      typeof parsed.sfi === "string" &&
+      typeof parsed.kp === "string" &&
+      typeof parsed.updatedAt === "string"
+    ) {
+      return {
+        sfi: parsed.sfi,
+        kp: parsed.kp,
+        aIndex: typeof parsed.aIndex === "string" ? parsed.aIndex : undefined,
+        muf: typeof parsed.muf === "string" ? parsed.muf : undefined,
+        updatedAt: parsed.updatedAt,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 function getHomeGridFromQuery(query: unknown): string | undefined {

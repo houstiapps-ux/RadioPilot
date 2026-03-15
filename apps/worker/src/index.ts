@@ -3,9 +3,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
-import { parseDxClusterLine, type ParsedSpot } from "@radio-pilot/shared";
+import {
+  parseDxClusterLine,
+  type ActivationRecord,
+  type ParsedSpot,
+  type SolarConditions,
+} from "@radio-pilot/shared";
 import { createClient } from "redis";
 import { fetchDxHeatSpots } from "./sources/dxheat.js";
+import { fetchPskReporterSummary } from "./sources/psk-reporter.js";
+import { fetchPotaActivations } from "./sources/pota.js";
+import { fetchSolarConditions } from "./sources/solar.js";
+import { fetchSotaActivations } from "./sources/sota.js";
 import { startSnapshotLoop } from "./snapshot.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -31,8 +40,12 @@ const spotSource = process.env.SPOT_SOURCE ?? "dxheat";
 const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 const logLevel = process.env.LOG_LEVEL ?? "info";
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS ?? 30_000);
+const pskReporterPollIntervalMs = Number(process.env.PSK_REPORTER_POLL_INTERVAL_MS ?? 5 * 60 * 1000);
+const solarPollIntervalMs = 10 * 60 * 1000;
+const activationPollIntervalMs = Number(process.env.ACTIVATION_POLL_INTERVAL_MS ?? 5 * 60 * 1000);
 const dedupeWindowMs = 15 * 60 * 1000;
 const recentSpotRetentionMs = 60 * 60 * 1000;
+const recentActivationRetentionMs = 6 * 60 * 60 * 1000;
 const reconnectBaseDelayMs = 1_000;
 const reconnectMaxDelayMs = 30_000;
 
@@ -46,6 +59,9 @@ console.info("Connecting to Redis");
 await redis.connect();
 console.info("Redis connected");
 startSnapshotLoop(redis);
+startSolarPolling();
+startPskReporterPolling();
+startActivationPolling();
 console.info(`Starting spot worker with source ${spotSource}`);
 startSpotSource();
 
@@ -257,6 +273,21 @@ function startDxHeatPolling(): void {
   void runDxHeatPollingLoop();
 }
 
+function startSolarPolling(): void {
+  console.info(`Solar polling started with interval ${solarPollIntervalMs}ms`);
+  void runSolarPollingLoop();
+}
+
+function startPskReporterPolling(): void {
+  console.info(`PSK Reporter polling started with interval ${pskReporterPollIntervalMs}ms`);
+  void runPskReporterPollingLoop();
+}
+
+function startActivationPolling(): void {
+  console.info(`Activation polling started with interval ${activationPollIntervalMs}ms`);
+  void runActivationPollingLoop();
+}
+
 async function pollDxHeat(): Promise<void> {
   try {
     const parsedSpots = await fetchDxHeatSpots();
@@ -296,6 +327,60 @@ async function runDxHeatPollingLoop(): Promise<void> {
   while (true) {
     await pollDxHeat();
     await delay(pollIntervalMs);
+  }
+}
+
+async function pollSolar(): Promise<void> {
+  const solar = await fetchSolarConditions();
+
+  if (!solar) {
+    return;
+  }
+
+  await persistSolarConditions(solar);
+}
+
+async function runSolarPollingLoop(): Promise<void> {
+  while (true) {
+    await pollSolar();
+    await delay(solarPollIntervalMs);
+  }
+}
+
+async function pollPskReporter(): Promise<void> {
+  const summary = await fetchPskReporterSummary();
+
+  if (!summary) {
+    return;
+  }
+
+  await redis.set("psk:summary:latest", JSON.stringify(summary));
+}
+
+async function runPskReporterPollingLoop(): Promise<void> {
+  while (true) {
+    await pollPskReporter();
+    await delay(pskReporterPollIntervalMs);
+  }
+}
+
+async function pollActivations(): Promise<void> {
+  const [sotaActivations, potaActivations] = await Promise.all([
+    fetchSotaActivations(),
+    fetchPotaActivations(),
+  ]);
+
+  for (const activation of [...sotaActivations, ...potaActivations]) {
+    await persistActivation(activation);
+  }
+
+  await pruneRecentActivations();
+}
+
+async function runActivationPollingLoop(): Promise<void> {
+  while (true) {
+    await pollActivations();
+    await delay(activationPollIntervalMs);
   }
 }
 
@@ -364,6 +449,29 @@ async function persistDxHeatSpot(parsedSpot: ParsedSpot): Promise<boolean> {
   return true;
 }
 
+async function persistSolarConditions(solar: SolarConditions): Promise<void> {
+  await redis.set("solar:latest", JSON.stringify(solar));
+}
+
+async function persistActivation(activation: ActivationRecord): Promise<void> {
+  const observedAtMs = Date.parse(activation.observedAt);
+
+  if (!Number.isFinite(observedAtMs)) {
+    console.error("Activation skipped: invalid observedAt", activation);
+    return;
+  }
+
+  const payload = JSON.stringify({
+    ...activation,
+    receivedAt: new Date().toISOString(),
+  });
+
+  await redis.zAdd("activations:recent", {
+    score: observedAtMs,
+    value: payload,
+  });
+}
+
 function buildDxHeatDedupeId(parsedSpot: ParsedSpot): string {
   if (parsedSpot.id.length > 0) {
     return parsedSpot.id;
@@ -400,6 +508,11 @@ function scheduleReconnect(): void {
 async function pruneRecentSortedSpots(): Promise<void> {
   const cutoff = Date.now() - recentSpotRetentionMs;
   await redis.zRemRangeByScore("spots:recent", 0, cutoff);
+}
+
+async function pruneRecentActivations(): Promise<void> {
+  const cutoff = Date.now() - recentActivationRetentionMs;
+  await redis.zRemRangeByScore("activations:recent", 0, cutoff);
 }
 
 function delay(ms: number): Promise<void> {

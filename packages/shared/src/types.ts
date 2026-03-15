@@ -1,4 +1,5 @@
 import type { Band } from "./bands.js";
+import type { MaidenheadPathEstimate } from "./maidenhead.js";
 
 export type SpotMode = "CW" | "SSB" | "FT8" | "FT4";
 export type ParsedSpotMode = "cw" | "ssb" | "ft8" | "ft4" | "digital" | "unknown";
@@ -38,6 +39,53 @@ export interface OpportunityCard {
   readonly score: number;
 }
 
+export interface SolarConditions {
+  readonly sfi: string;
+  readonly kp: string;
+  readonly aIndex?: string;
+  readonly muf?: string;
+  readonly updatedAt: string;
+}
+
+export interface ActivationRecord {
+  readonly id: string;
+  readonly programme: "SOTA" | "POTA";
+  readonly reference: string;
+  readonly callsign: string;
+  readonly band: Band | null;
+  readonly mode?: string;
+  readonly locator?: string;
+  readonly latitude?: number;
+  readonly longitude?: number;
+  readonly observedAt: string;
+}
+
+export interface PskReporterReport {
+  readonly txCallsign: string;
+  readonly rxCallsign: string;
+  readonly txGrid: string;
+  readonly rxGrid: string;
+  readonly band: Band | null;
+  readonly mode: string;
+  readonly observedAt: string;
+}
+
+export interface PskReporterBandSummary {
+  readonly band: Band | null;
+  readonly reportCount: number;
+  readonly previousReportCount: number;
+  readonly trend: number;
+  readonly directionCounts: Readonly<Partial<Record<MaidenheadPathEstimate["direction"], number>>>;
+}
+
+export interface PskReporterSummary {
+  readonly generatedAt: string;
+  readonly currentWindowStart: string;
+  readonly previousWindowStart: string;
+  readonly windowMinutes: number;
+  readonly bands: readonly PskReporterBandSummary[];
+}
+
 export interface OpportunitySnapshot {
   readonly generatedAt: string;
   readonly cards: readonly OpportunityCard[];
@@ -45,4 +93,5 @@ export interface OpportunitySnapshot {
   readonly watchNext: readonly OpportunityCard[];
   readonly dxOpportunity: OpportunityCard | null;
   readonly nearbyActivity: readonly OpportunityCard[];
+  readonly solar?: SolarConditions | null;
 }
