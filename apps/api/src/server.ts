@@ -70,27 +70,7 @@ app.get("/health", async () => {
 });
 
 app.get("/api/opportunities", async (request) => {
-  const homeGrid = getHomeGridFromQuery(request.query);
-  const operatingStyle = getOperatingStyleFromQuery(request.query);
-  const now = Date.now();
-  const [rawSpots, rawSolar] = await Promise.all([
-    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
-    redis.get("solar:latest"),
-  ]);
-  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
-  const solar = parseSolar(rawSolar);
-
-  if (spots.length === 0) {
-    return {
-      ...emptySnapshot(),
-      solar,
-    };
-  }
-
-  return {
-    ...buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle }),
-    solar,
-  };
+  return buildPersonalizedSnapshot(request.query, "api");
 });
 
 app.get("/debug/recent-spots", async () => {
@@ -99,27 +79,7 @@ app.get("/debug/recent-spots", async () => {
 });
 
 app.get("/debug/snapshot", async (request) => {
-  const homeGrid = getHomeGridFromQuery(request.query);
-  const operatingStyle = getOperatingStyleFromQuery(request.query);
-  const now = Date.now();
-  const [rawSpots, rawSolar] = await Promise.all([
-    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
-    redis.get("solar:latest"),
-  ]);
-  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
-  const solar = parseSolar(rawSolar);
-
-  if (spots.length === 0) {
-    return {
-      ...emptySnapshot(),
-      solar,
-    };
-  }
-
-  return {
-    ...buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle }),
-    solar,
-  };
+  return buildPersonalizedSnapshot(request.query, "debug");
 });
 
 app.get("/debug/solar", async () => {
@@ -156,7 +116,10 @@ function parseSolar(value: string | null): SolarConditions | null {
         sfi: typeof parsed.sfi === "number" ? parsed.sfi : undefined,
         kp: typeof parsed.kp === "number" ? parsed.kp : undefined,
         aIndex: typeof parsed.aIndex === "number" ? parsed.aIndex : undefined,
-        muf: typeof parsed.muf === "number" ? parsed.muf : undefined,
+        muf:
+          typeof parsed.muf === "number" || typeof parsed.muf === "string"
+            ? parsed.muf
+            : undefined,
         sunspots: typeof parsed.sunspots === "number" ? parsed.sunspots : undefined,
         updatedAt: parsed.updatedAt,
       };
@@ -204,6 +167,45 @@ function parseJson(value: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+async function buildPersonalizedSnapshot(
+  query: unknown,
+  source: "api" | "debug",
+): Promise<OpportunitySnapshot> {
+  const homeGrid = getHomeGridFromQuery(query);
+  const operatingStyle = getOperatingStyleFromQuery(query);
+  const now = Date.now();
+  const [rawSpots, rawSolar] = await Promise.all([
+    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
+    redis.get("solar:latest"),
+  ]);
+  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
+  const solar = parseSolar(rawSolar);
+  const spotsWithDxLocator = spots.filter((spot) => typeof spot.dxLocator === "string").length;
+
+  // Temporary request-time trace to verify that homeGrid personalization is actually being applied.
+  console.info(
+    `[${source}] opportunities personalization`,
+    JSON.stringify({
+      homeGrid: homeGrid ?? null,
+      operatingStyle: operatingStyle ?? null,
+      spotCount: spots.length,
+      spotsWithDxLocator,
+    }),
+  );
+
+  if (spots.length === 0) {
+    return {
+      ...emptySnapshot(),
+      solar,
+    };
+  }
+
+  return {
+    ...buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle }),
+    solar,
+  };
 }
 
 function renderIndexPage(): string {

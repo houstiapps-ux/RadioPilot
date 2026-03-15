@@ -25,7 +25,7 @@ type OpportunityCard = {
 type SolarData = {
   sfi?: number;
   kp?: number;
-  muf?: number;
+  muf?: number | string;
   aIndex?: number;
   sunspots?: number;
   updatedAt?: string;
@@ -420,13 +420,27 @@ function OperatorCard(props: {
   featured?: boolean;
 }) {
   const view = toOperatorView(props.card, props.tone);
+  const flag = countryCodeToFlagEmoji(props.card.countryCode);
+  const modeItems = getModeIndicators(props.card);
+  const tagItems = props.card.tags.map(getTagIndicator);
 
   return (
     <article className={`operator-card ${props.featured ? "operator-card-featured" : ""}`}>
       <div className="operator-row">
         <div>
           <div className="operator-band">{view.band}</div>
-          <div className="operator-target">{view.primaryLine}</div>
+          <div className="operator-target-row">
+            {flag ? (
+              <span
+                className="operator-flag"
+                title={view.country}
+                aria-label={view.country}
+              >
+                {flag}
+              </span>
+            ) : null}
+            <div className="operator-target">{view.primaryLine}</div>
+          </div>
           <div className="operator-subline">{view.country}</div>
         </div>
         <div className="operator-frequency">{formatFrequency(props.card.frequencyKHz)}</div>
@@ -435,22 +449,31 @@ function OperatorCard(props: {
       <div className="operator-meta-grid">
         <MetaLine label="Direction" value={view.directionLine} />
         <MetaLine label="Beam" value={view.beamHeading} />
-        <MetaLine label="Modes" value={view.suggestedModes} />
-        <MetaLine label="Confidence" value={view.confidence} />
+        <ModeMetaLine items={modeItems} />
+        <ConfidenceMetaLine value={view.confidence} />
       </div>
 
       <p className="operator-reason">{view.reasonSummary}</p>
 
       <div className="tag-strip">
-        {view.tagItems.length > 0 ? (
-          view.tagItems.map((tag) => (
-            <span
-              key={tag}
-              className={portableTags.has(tag) ? "tag-chip tag-chip-portable" : "tag-chip"}
-            >
-              {tag}
-            </span>
-          ))
+        {tagItems.length > 0 ? (
+          tagItems.map((item) => item.kind === "icon"
+            ? (
+              <span
+                key={item.id}
+                className="tag-chip tag-chip-icon"
+                title={item.label}
+                aria-label={item.label}
+              >
+                <span className="inline-symbol" aria-hidden="true">{item.glyph}</span>
+                <span>{item.text}</span>
+              </span>
+            )
+            : (
+              <span key={item.id} className="tag-chip">
+                {item.text}
+              </span>
+            ))
         ) : (
           <span className="tag-chip tag-chip-muted">None</span>
         )}
@@ -467,6 +490,58 @@ function MetaLine(props: { label: string; value: string }) {
     </div>
   );
 }
+
+function ConfidenceMetaLine(props: { value: string }) {
+  const toneClassName =
+    props.value === "High"
+      ? "confidence-badge confidence-high"
+      : props.value === "Medium"
+        ? "confidence-badge confidence-medium"
+        : "confidence-badge confidence-low";
+
+  return (
+    <div className="meta-line">
+      <span className="meta-line-label">Confidence</span>
+      <span className={toneClassName}>{props.value}</span>
+    </div>
+  );
+}
+
+function ModeMetaLine(props: { items: readonly IconIndicator[] }) {
+  return (
+    <div className="meta-line">
+      <span className="meta-line-label">Modes</span>
+      {props.items.length > 0 ? (
+        <div className="icon-strip mode-strip">
+          {props.items.map((item) => (
+            <span
+              key={item.id}
+              className="mode-chip"
+              title={item.label}
+              aria-label={item.label}
+            >
+              <span className="inline-symbol" aria-hidden="true">{item.glyph}</span>
+              <span>{item.text}</span>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <span className="meta-line-value">Mixed modes</span>
+      )}
+    </div>
+  );
+}
+
+type IconIndicator = {
+  id: string;
+  glyph: string;
+  label: string;
+  text: string;
+};
+
+type TagIndicator =
+  | ({ kind: "icon" } & IconIndicator)
+  | { kind: "text"; id: string; text: string };
 
 function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   band: string;
@@ -575,6 +650,113 @@ function getSuggestedModes(card: OpportunityCard): string {
   return "Mixed modes";
 }
 
+function getModeIndicators(card: OpportunityCard): readonly IconIndicator[] {
+  const modeKeys = new Set<string>();
+
+  for (const tag of card.tags) {
+    if (modeTags.has(tag)) {
+      modeKeys.add(tag);
+    }
+  }
+
+  const summary = card.summary.toUpperCase();
+
+  if (modeKeys.size === 0) {
+    if (summary.includes("DIGITAL")) {
+      modeKeys.add("DIGITAL");
+    } else if (summary.includes("PHONE")) {
+      modeKeys.add("PHONE");
+    } else if (summary.includes("CW")) {
+      modeKeys.add("CW");
+    }
+  }
+
+  return [...modeKeys].map((mode) => getModeIndicator(mode)).flatMap((item) => item ? [item] : []);
+}
+
+function getModeIndicator(mode: string): IconIndicator | null {
+  const normalized = mode.toUpperCase();
+
+  if (normalized === "CW") {
+    return { id: "mode-cw", glyph: "·−", label: "CW Morse mode", text: "CW" };
+  }
+
+  if (normalized === "SSB" || normalized === "PHONE") {
+    return {
+      id: `mode-${normalized.toLowerCase()}`,
+      glyph: "🎙",
+      label: "SSB voice mode",
+      text: normalized === "PHONE" ? "Phone" : "SSB",
+    };
+  }
+
+  if (normalized === "FT8") {
+    return { id: "mode-ft8", glyph: "〰", label: "FT8 digital mode", text: "FT8" };
+  }
+
+  if (normalized === "FT4") {
+    return { id: "mode-ft4", glyph: "〰", label: "FT4 digital mode", text: "FT4" };
+  }
+
+  if (normalized === "DIGITAL") {
+    return { id: "mode-digital", glyph: "〰", label: "Digital mode", text: "Digital" };
+  }
+
+  return null;
+}
+
+function getTagIndicator(tag: string): TagIndicator {
+  const normalized = tag.toUpperCase();
+
+  if (normalized === "SOTA") {
+    return {
+      kind: "icon",
+      id: "tag-sota",
+      glyph: "⛰",
+      label: "SOTA activation",
+      text: "SOTA",
+    };
+  }
+
+  if (normalized === "POTA") {
+    return {
+      kind: "icon",
+      id: "tag-pota",
+      glyph: "🌲",
+      label: "POTA activation",
+      text: "POTA",
+    };
+  }
+
+  if (normalized === "WWFF") {
+    return {
+      kind: "icon",
+      id: "tag-wwff",
+      glyph: "🍃",
+      label: "WWFF activation",
+      text: "WWFF",
+    };
+  }
+
+  if (normalized === "/P") {
+    return {
+      kind: "icon",
+      id: "tag-portable",
+      glyph: "🎒",
+      label: "Portable station",
+      text: "/P",
+    };
+  }
+
+  const modeIndicator = getModeIndicator(normalized);
+
+  if (modeIndicator) {
+    return { kind: "icon", ...modeIndicator };
+  }
+
+  return { kind: "text", id: `tag-${normalized}`, text: tag };
+}
+
 function getConfidence(score: number): string {
   if (score >= 400) {
     return "High";
@@ -609,10 +791,9 @@ function formatSolarNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-function formatSolarValue(value: number | undefined): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? formatSolarNumber(value)
-    : "—";
+function formatSolarValue(value: number | string | undefined): string {
+  const numericValue = parseSolarNumber(value);
+  return numericValue !== null ? formatSolarNumber(numericValue) : "—";
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -671,6 +852,23 @@ function formatCountry(countryCode: string | undefined): string {
   } catch {
     return countryCode.toUpperCase();
   }
+}
+
+function countryCodeToFlagEmoji(countryCode: string | undefined): string | undefined {
+  if (!countryCode) {
+    return undefined;
+  }
+
+  const normalized = countryCode.trim().toUpperCase();
+
+  if (!/^[A-Z]{2}$/.test(normalized)) {
+    return undefined;
+  }
+
+  return String.fromCodePoint(
+    normalized.charCodeAt(0) + 127397,
+    normalized.charCodeAt(1) + 127397,
+  );
 }
 
 function formatSolarUpdatedAt(value: string | undefined): string {

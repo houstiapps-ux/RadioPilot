@@ -70,3 +70,25 @@ test("does not use unrelated source text as updatedAt", () => {
     updatedAt: "2026-03-15T10:05:00.000Z",
   });
 });
+
+test("parses MUF numeric values from text with units", () => {
+  const parsed = parseSolarXml(
+    `
+      <solar>
+        <solarflux>145</solarflux>
+        <kindex>2</kindex>
+        <calculatedmuf>32.4 MHz</calculatedmuf>
+      </solar>
+    `,
+    "2026-03-15T10:05:00.000Z",
+  );
+
+  assert.deepEqual(parsed, {
+    sfi: 145,
+    kp: 2,
+    aIndex: undefined,
+    muf: 32.4,
+    sunspots: undefined,
+    updatedAt: "2026-03-15T10:05:00.000Z",
+  });
+});

@@ -43,7 +43,7 @@ export interface SolarConditions {
   readonly sfi?: number;
   readonly kp?: number;
   readonly aIndex?: number;
-  readonly muf?: number;
+  readonly muf?: number | string;
   readonly sunspots?: number;
   readonly updatedAt: string;
 }

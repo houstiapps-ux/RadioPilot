@@ -79,7 +79,10 @@ function parseSolar(value: string | null): SolarConditions | null {
         sfi: typeof parsed.sfi === "number" ? parsed.sfi : undefined,
         kp: typeof parsed.kp === "number" ? parsed.kp : undefined,
         aIndex: typeof parsed.aIndex === "number" ? parsed.aIndex : undefined,
-        muf: typeof parsed.muf === "number" ? parsed.muf : undefined,
+        muf:
+          typeof parsed.muf === "number" || typeof parsed.muf === "string"
+            ? parsed.muf
+            : undefined,
         sunspots: typeof parsed.sunspots === "number" ? parsed.sunspots : undefined,
         updatedAt: parsed.updatedAt,
       };

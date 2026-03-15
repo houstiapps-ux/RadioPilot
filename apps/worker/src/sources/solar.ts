@@ -39,7 +39,7 @@ export function parseSolarXml(xml: string, fetchedAt: string): SolarConditions |
     sfi,
     kp,
     aIndex: readNumericXmlValue(xml, ["aindex", "a-index", "a"]),
-    muf: readNumericXmlValue(xml, ["muf", "calculatedmuf"]),
+    muf: readMufValue(xml),
     sunspots: readNumericXmlValue(xml, ["sunspots", "sunspotnumber", "spots"]),
     updatedAt,
   };
@@ -88,5 +88,38 @@ function readNumericXmlValue(xml: string, tagNames: readonly string[]): number |
 
   const normalized = rawValue.replace(",", ".").trim();
   const numericValue = Number.parseFloat(normalized);
+  return Number.isFinite(numericValue) ? numericValue : undefined;
+}
+
+function readMufValue(xml: string): number | string | undefined {
+  const rawValue = readXmlValue(xml, [
+    "muf",
+    "calculatedmuf",
+    "calculated-muf",
+    "mufvalue",
+  ]);
+
+  if (!rawValue) {
+    return undefined;
+  }
+
+  const numericValue = extractNumericPortion(rawValue);
+
+  if (numericValue !== undefined) {
+    return numericValue;
+  }
+
+  const normalized = rawValue.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function extractNumericPortion(value: string): number | undefined {
+  const match = value.replace(",", ".").match(/-?\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return undefined;
+  }
+
+  const numericValue = Number.parseFloat(match[0]);
   return Number.isFinite(numericValue) ? numericValue : undefined;
 }
