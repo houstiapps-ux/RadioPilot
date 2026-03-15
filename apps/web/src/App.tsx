@@ -203,6 +203,11 @@ export function App() {
         />
       </section>
 
+      <div className="active-filters-row">
+        <span className="active-filters-label">Active:</span>
+        <span className="active-filters-value">{formatActiveFilters(settings)}</span>
+      </div>
+
       <section className="solar-card">
         <SolarPanel data={solarData} />
       </section>
@@ -229,7 +234,7 @@ export function App() {
             title="Best Opportunity"
             tone="best"
             item={snapshot?.bestOpportunity ?? null}
-            emptyMessage="No clear top recommendation right now."
+            emptyMessage={getEmptyMessage("best", settings)}
             featured
           />
 
@@ -237,7 +242,7 @@ export function App() {
             title="DX Opportunity"
             tone="dx"
             item={snapshot?.dxOpportunity ?? null}
-            emptyMessage="No standout DX target at the moment."
+            emptyMessage={getEmptyMessage("dx", settings)}
           />
         </div>
 
@@ -246,14 +251,14 @@ export function App() {
             title="Watch Next"
             tone="watch"
             items={snapshot?.watchNext ?? []}
-            emptyMessage="No follow-on band is building yet."
+            emptyMessage={getEmptyMessage("watch", settings)}
           />
 
           <OpportunityPanel
             title="Nearby Activity"
             tone="nearby"
             items={snapshot?.nearbyActivity ?? []}
-            emptyMessage="No portable activity is standing out nearby."
+            emptyMessage={getEmptyMessage("nearby", settings)}
           />
         </div>
       </section>
@@ -964,6 +969,154 @@ function getConfidence(score: number): string {
 function formatStationLine(settings: OperatorSettings): string {
   const grid = settings.homeGridValid ? settings.homeGrid.slice(0, 4) : "Not set";
   return `Location: ${grid} | HF/VHF`;
+}
+
+function formatActiveFilters(settings: OperatorSettings): string {
+  const chasing = formatChasingFilter(settings.chasing);
+  const mode = formatModeFilter(settings.modeFilter);
+  const bands = formatBandScopeFilter(settings.bandScope);
+
+  return `${chasing} · ${mode} · ${bands}`;
+}
+
+function getEmptyMessage(
+  tone: PanelTone,
+  settings: OperatorSettings,
+): string {
+  const chasing = settings.chasing ?? "any";
+  const mode = settings.modeFilter ?? "any";
+  const bandScope = settings.bandScope ?? "any";
+
+  if (tone === "best") {
+    if (chasing === "sota") {
+      return "No SOTA opportunity currently standing out.";
+    }
+
+    if (chasing === "pota") {
+      return "No POTA opportunity currently standing out.";
+    }
+
+    if (chasing === "portable") {
+      return "No portable opportunity currently standing out.";
+    }
+
+    if (chasing === "digital") {
+      return `No ${formatBandScopeShort(bandScope)} digital opportunity currently standing out.`;
+    }
+
+    if (mode !== "any") {
+      return `No ${formatModeShort(mode)} opportunity currently standing out.`;
+    }
+
+    return "No clear top recommendation right now.";
+  }
+
+  if (tone === "watch") {
+    if (mode === "digital" && bandScope === "hf") {
+      return "No digital HF band building yet.";
+    }
+
+    if (chasing === "sota") {
+      return "No SOTA band is building yet.";
+    }
+
+    if (chasing === "pota") {
+      return "No POTA band is building yet.";
+    }
+
+    return "No follow-on band is building yet.";
+  }
+
+  if (tone === "dx") {
+    if (chasing === "dx" || chasing !== "any" || mode !== "any" || bandScope !== "any") {
+      return "No DX matching current filters.";
+    }
+
+    return "No standout DX target at the moment.";
+  }
+
+  if (chasing === "sota") {
+    return "No nearby SOTA activity matches current filters.";
+  }
+
+  if (chasing === "pota") {
+    return "No nearby POTA activity matches current filters.";
+  }
+
+  if (chasing === "portable") {
+    return "No nearby portable activity matches current filters.";
+  }
+
+  return "No portable activity is standing out nearby.";
+}
+
+function formatModeShort(value: Exclude<OperatorSettings["modeFilter"], undefined>): string {
+  if (value === "ssb") {
+    return "SSB";
+  }
+
+  if (value === "cw") {
+    return "CW";
+  }
+
+  if (value === "digital") {
+    return "digital";
+  }
+
+  return "Any mode";
+}
+
+function formatBandScopeShort(value: Exclude<OperatorSettings["bandScope"], undefined>): string {
+  if (value === "hf") {
+    return "HF";
+  }
+
+  if (value === "vhf-uhf") {
+    return "VHF/UHF";
+  }
+
+  return "any-band";
+}
+
+function formatChasingFilter(value: OperatorSettings["chasing"]): string {
+  switch (value) {
+    case "dx":
+      return "DX";
+    case "pota":
+      return "POTA";
+    case "sota":
+      return "SOTA";
+    case "portable":
+      return "Portable";
+    case "digital":
+      return "Digital";
+    default:
+      return "Any chasing";
+  }
+}
+
+function formatModeFilter(value: OperatorSettings["modeFilter"]): string {
+  switch (value) {
+    case "ssb":
+      return "SSB";
+    case "cw":
+      return "CW";
+    case "digital":
+      return "Digital";
+    default:
+      return "Any mode";
+  }
+}
+
+function formatBandScopeFilter(value: OperatorSettings["bandScope"]): string {
+  switch (value) {
+    case "hf":
+      return "HF";
+    case "vhf-uhf":
+      return "VHF/UHF";
+    default:
+      return "Any bands";
+  }
 }
 
 function formatDirectionShort(direction: string): string {

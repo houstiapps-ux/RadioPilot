@@ -335,6 +335,38 @@ test("applies request-time intent filters to ranking and band scope", () => {
   assert.ok(snapshot.nearbyActivity.every((card) => card.band !== "2m"));
 });
 
+test("chasing filters materially change best-opportunity ranking when a preferred match exists", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const snapshot = buildOpportunitySnapshot([
+    createSpot("K1BIG", "FN31PR", "phone", "2026-03-15T11:59:00.000Z", 14250, "20m", ["SSB"]),
+    createSpot("K1BIG", "FN31PR", "phone", "2026-03-15T11:58:30.000Z", 14250, "20m", ["SSB"]),
+    createSpot("EA8LOUD", "IL18", "phone", "2026-03-15T11:58:00.000Z", 14250, "20m", ["SSB"]),
+    createSpot("EI7ABC/P", "IO63VG", "digital", "2026-03-15T11:57:00.000Z", 7074, "40m", ["POTA", "/P", "FT8"]),
+  ], {
+    now,
+    homeGrid: "IO63UI",
+    chasing: "pota",
+  });
+
+  assert.equal(snapshot.bestOpportunity?.callsign, "EI7ABC/P");
+});
+
+test("returns no best opportunity when a chasing filter has no matching candidates", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const snapshot = buildOpportunitySnapshot([
+    createSpot("K1ABC", "FN31PR", "phone", "2026-03-15T11:58:00.000Z", 14250, "20m", ["SSB"]),
+    createSpot("EA8ABC", "IL18", "digital", "2026-03-15T11:57:00.000Z", 14074, "20m", ["FT8"]),
+  ], {
+    now,
+    homeGrid: "IO63UI",
+    chasing: "sota",
+  });
+
+  assert.equal(snapshot.bestOpportunity, null);
+  assert.equal(snapshot.watchNext.length, 0);
+  assert.equal(snapshot.nearbyActivity.length, 0);
+});
+
 function createSpot(
   callsign: string,
   dxLocator: string,
