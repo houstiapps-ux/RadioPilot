@@ -29,6 +29,13 @@ test("enriches opportunities with dominant direction, bearing, region, and confi
   assert.ok(typeof snapshot.bestOpportunity.bearing === "number");
   assert.equal(snapshot.bestOpportunity.region, "North America");
   assert.equal(snapshot.bestOpportunity.confidence, "High");
+  assert.equal(snapshot.bestOpportunity.directionConfidence, "Low");
+  assert.equal(snapshot.bestOpportunity.cardType, "best");
+  assert.equal(snapshot.bestOpportunity.bandState, "Opening");
+  assert.ok(Array.isArray(snapshot.bestOpportunity.signals));
+  assert.ok(Array.isArray(snapshot.bestOpportunity.why));
+  assert.ok(typeof snapshot.bestOpportunity.actionLine === "string");
+  assert.ok(typeof snapshot.bestOpportunity.frequencyMhz === "string");
   assert.match(snapshot.bestOpportunity.summary, /North America opening/);
   assert.match(snapshot.bestOpportunity.summary, /West \(\d+°\)/);
 });
@@ -183,6 +190,22 @@ test("prefers a rarer DX candidate over duplicating best opportunity", () => {
   assert.ok(debug.dxCandidates.some((candidate) => candidate.callsign === "FT4GL"));
 });
 
+test("builds nearby activity from regional distance and portable context", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const snapshot = buildOpportunitySnapshot([
+    createSpot("EI7ABC/P", "IO63VG", "digital", "2026-03-15T11:59:00.000Z"),
+    createSpot("EA8ABC", "IL18", "digital", "2026-03-15T11:58:00.000Z"),
+  ], {
+    now,
+    homeGrid: "IO63UI",
+  });
+
+  assert.equal(snapshot.nearbyActivity.length, 1);
+  assert.equal(snapshot.nearbyActivity[0]?.callsign, "EI7ABC/P");
+  assert.equal(snapshot.nearbyActivity[0]?.cardType, "nearby");
+  assert.ok(typeof snapshot.nearbyActivity[0]?.distanceKm === "number");
+});
+
 function createSpot(
   callsign: string,
   dxLocator: string,
@@ -194,8 +217,8 @@ function createSpot(
     source: "dxheat",
     spotterCallsign: "EI2TEST",
     spottedCallsign: callsign,
-    continentDx: callsign === "FT4GL" ? "AF" : "NA",
-    countryCode: callsign === "FT4GL" ? "FR" : "US",
+    continentDx: callsign === "FT4GL" ? "AF" : callsign.startsWith("EI") ? "EU" : "NA",
+    countryCode: callsign === "FT4GL" ? "FR" : callsign.startsWith("EI") ? "IE" : "US",
     dxLocator,
     frequencyKHz: 14250,
     band: "20m",

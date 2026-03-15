@@ -26,15 +26,33 @@ export interface ParsedSpot {
 
 export interface OpportunityCard {
   readonly id: string;
+  readonly cardType?: "best" | "watch" | "dx" | "nearby";
   readonly callsign: string;
+  readonly entity?: string;
   readonly band: Band | null;
   readonly frequencyKHz: number;
+  readonly frequencyMhz?: string;
   readonly summary: string;
   readonly countryCode?: string;
   readonly direction?: string;
   readonly bearing?: number;
+  readonly beamHeading?: number;
+  readonly directionConfidence?: "High" | "Medium" | "Low";
   readonly region?: string;
   readonly confidence?: "Low" | "Medium" | "High";
+  readonly confidenceReason?: string;
+  readonly activityLevel?: "High" | "Moderate" | "Low";
+  readonly bandState?: "Opening" | "Stable" | "Fading";
+  readonly freshnessSeconds?: number;
+  readonly actionLine?: string;
+  readonly signals?: readonly string[];
+  readonly why?: readonly string[];
+  readonly modeSummary?: string;
+  readonly distanceKm?: number;
+  readonly trendLabel?: "Rising" | "Steady" | "Falling";
+  readonly portable?: boolean;
+  readonly portableType?: "SOTA" | "POTA" | "Portable";
+  readonly regional?: boolean;
   readonly tags: readonly SpotTag[];
   readonly score: number;
 }
@@ -46,6 +64,8 @@ export interface SolarConditions {
   readonly muf?: number | string;
   readonly sunspots?: number;
   readonly updatedAt: string;
+  readonly favouredBands?: readonly string[];
+  readonly solarSummary?: readonly string[];
 }
 
 export interface ActivationRecord {
@@ -110,6 +130,24 @@ export interface PskBandTrend {
 }
 
 export type PskBandTrendMap = Readonly<Partial<Record<Band, PskBandTrend>>>;
+
+export interface BandPrediction {
+  readonly state: "opening" | "stable" | "fading";
+  readonly score: number;
+  readonly signals: readonly string[];
+}
+
+export type BandPredictionMap = Readonly<Partial<Record<Band, BandPrediction>>>;
+
+export interface PropagationBandDensity {
+  readonly dominantDirection?: "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
+  readonly sector?: string;
+  readonly beamHeading?: number;
+  readonly confidence: "High" | "Medium" | "Low";
+  readonly densities: Readonly<Partial<Record<MaidenheadPathEstimate["direction"], number>>>;
+}
+
+export type PropagationDensityMap = Readonly<Partial<Record<Band, PropagationBandDensity>>>;
 
 export interface OpportunitySnapshot {
   readonly generatedAt: string;

@@ -4,7 +4,10 @@ import dotenv from "dotenv";
 import Fastify from "fastify";
 
 import {
+  predictBandOpenings,
   buildOpportunitySnapshotWithDebug,
+  findNearbyOpportunities,
+  getDirectionalPropagation,
   loadDxRarityContext,
   getAllBandTrends,
   parseMaidenheadLocator,
@@ -117,6 +120,37 @@ app.get("/debug/psk", async () => {
   };
 });
 
+app.get("/debug/nearby", async (request) => {
+  const homeGrid = getHomeGridFromQuery(request.query);
+
+  if (!homeGrid) {
+    return {
+      candidates: [],
+      message: "Valid homeGrid query parameter required",
+    };
+  }
+
+  const now = Date.now();
+  const rawSpots = await redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS, now);
+  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
+  const nearby = findNearbyOpportunities({ homeGrid }, spots, undefined, now);
+
+  return {
+    candidates: nearby.candidates,
+  };
+});
+
+app.get("/debug/bands", async (_request) => {
+  return {
+    bands: await predictBandOpenings(redis, {}),
+  };
+});
+
+app.get("/debug/propagation", async (request) => {
+  const homeGrid = getHomeGridFromQuery(request.query);
+  return await getDirectionalPropagation(redis, { homeGrid });
+});
+
 await app.listen({ port, host });
 
 function parseSnapshot(value: string | null): OpportunitySnapshot | null {
@@ -152,6 +186,17 @@ function parseSolar(value: string | null): SolarConditions | null {
             : undefined,
         sunspots: typeof parsed.sunspots === "number" ? parsed.sunspots : undefined,
         updatedAt: parsed.updatedAt,
+        ...deriveSolarGuidance({
+          sfi: typeof parsed.sfi === "number" ? parsed.sfi : undefined,
+          kp: typeof parsed.kp === "number" ? parsed.kp : undefined,
+          aIndex: typeof parsed.aIndex === "number" ? parsed.aIndex : undefined,
+          muf:
+            typeof parsed.muf === "number" || typeof parsed.muf === "string"
+              ? parsed.muf
+              : undefined,
+          sunspots: typeof parsed.sunspots === "number" ? parsed.sunspots : undefined,
+          updatedAt: parsed.updatedAt,
+        }),
       };
     }
   } catch {
@@ -292,11 +337,13 @@ async function buildPersonalizedSnapshotDebug(
   const homeGrid = getHomeGridFromQuery(query);
   const operatingStyle = getOperatingStyleFromQuery(query);
   const now = Date.now();
-  const [rawSpots, rawSolar, rawPsk, pskTrends] = await Promise.all([
+  const [rawSpots, rawSolar, rawPsk, pskTrends, bandPredictions, propagationDensity] = await Promise.all([
     redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
     redis.get("solar:latest"),
     redis.get("psk:summary"),
     getAllBandTrends(redis),
+    predictBandOpenings(redis, { homeGrid }),
+    getDirectionalPropagation(redis, { homeGrid }),
   ]);
   const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
   const dxRarity = await loadDxRarityContext(redis, spots, now);
@@ -332,6 +379,8 @@ async function buildPersonalizedSnapshotDebug(
     pskTrends: filterFreshPskTrends(pskTrends, now),
     dxRarity,
     solar,
+    bandPredictions,
+    propagationDensity,
   });
   const snapshot = {
     ...built.snapshot,
@@ -355,6 +404,54 @@ function filterFreshPskTrends(
   _now: number,
 ): PskBandTrendMap {
   return trends;
+}
+
+function deriveSolarGuidance(solar: SolarConditions): Pick<SolarConditions, "favouredBands" | "solarSummary"> {
+  const muf = parseSolarMuf(solar.muf);
+  const sfi = solar.sfi ?? 0;
+  const kp = solar.kp ?? 0;
+  const favouredBands: string[] = [];
+  const solarSummary: string[] = [];
+
+  if (muf !== null && muf >= 28 && sfi >= 140 && kp <= 3) {
+    favouredBands.push("10m");
+    solarSummary.push("10m possible");
+  } else {
+    solarSummary.push("10m unlikely");
+  }
+
+  if (muf !== null && muf >= 21 && kp <= 4) {
+    favouredBands.push("15m");
+    solarSummary.push("15m possible");
+  }
+
+  if (muf !== null && muf >= 14) {
+    favouredBands.push("20m");
+    solarSummary.push("20m reliable");
+  }
+
+  if (kp <= 5) {
+    favouredBands.push("40m");
+    solarSummary.push("40m usable");
+  }
+
+  return {
+    favouredBands,
+    solarSummary,
+  };
+}
+
+function parseSolarMuf(value: number | string | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }
 
 function renderIndexPage(): string {

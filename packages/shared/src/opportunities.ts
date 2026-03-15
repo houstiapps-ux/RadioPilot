@@ -2,15 +2,18 @@ import {
   scoreDxCandidate,
   type DxRarityContext,
 } from "./dxRarity.js";
+import { findNearbyOpportunities } from "./nearbyEngine.js";
 import {
   deriveContinentFromMaidenhead,
   estimatePathBetweenLocators,
   parseMaidenheadLocator,
 } from "./maidenhead.js";
 import type {
+  BandPredictionMap,
   OpportunityCard,
   OpportunitySnapshot,
   ParsedSpot,
+  PropagationDensityMap,
   PskBandTrendMap,
   PskReporterSummary,
   SolarConditions,
@@ -26,6 +29,8 @@ interface BuildOpportunitySnapshotOptions {
   readonly pskTrends?: PskBandTrendMap | null;
   readonly dxRarity?: DxRarityContext | null;
   readonly solar?: SolarConditions | null;
+  readonly bandPredictions?: BandPredictionMap | null;
+  readonly propagationDensity?: PropagationDensityMap | null;
 }
 
 export interface StoredOpportunitySpot extends ParsedSpot {
@@ -57,6 +62,14 @@ interface BandStats {
   readonly pskModeBoostApplied: boolean;
   readonly pskTrendLabel: "rising" | "steady" | "falling";
   readonly pskTrendConfidence: "High" | "Medium" | "Low" | null;
+  readonly predictedBandState: "opening" | "stable" | "fading";
+  readonly predictedBandScore: number;
+  readonly predictorSignals: readonly string[];
+  readonly propagationDirectionConfidence: "High" | "Medium" | "Low";
+  readonly propagationBeamHeading: number | null;
+  readonly propagationDirectionBucket: DirectionBucket | null;
+  readonly propagationSector: string | null;
+  readonly propagationSignals: readonly string[];
   readonly spots: readonly StoredOpportunitySpot[];
   readonly modeFamilyCounts: Readonly<Record<ModeFamilyKey, number>>;
   readonly representative: StoredOpportunitySpot;
@@ -116,6 +129,9 @@ export function buildOpportunitySnapshotWithDebug(
   const pskByBand = indexPskSummaryByBand(options.pskSummary);
   const pskTrends = options.pskTrends ?? {};
   const dxRarity = options.dxRarity ?? null;
+  const solar = options.solar ?? null;
+  const bandPredictions = options.bandPredictions ?? {};
+  const propagationDensity = options.propagationDensity ?? {};
   const currentSpots = allSpots.filter((spot) => {
     const spotTime = getSpotSortTime(spot);
     return spotTime >= currentWindowStart && spotTime <= now;
@@ -131,18 +147,26 @@ export function buildOpportunitySnapshotWithDebug(
     normalizedHomeGrid,
     pskByBand,
     pskTrends,
+    bandPredictions,
+    propagationDensity,
   );
   const rankedBands = statsByBand
-    .map((stats) => ({ stats, card: createOpportunityCard(stats, stats.representative, normalizedHomeGrid) }))
+    .map((stats) => ({
+      stats,
+      card: createOpportunityCard(stats, stats.representative, normalizedHomeGrid, solar, now),
+    }))
     .sort((left, right) =>
       compareCards(left.card, right.card, left.stats, right.stats, normalizedOperatingStyle),
     );
-  const rankedCards = rankedBands.map(({ card }) => card);
-  const portableCards = rankedBands
-    .flatMap(({ stats }) => {
-      const representative = selectPortableRepresentativeSpot(stats.spots);
-      return representative ? [createOpportunityCard(stats, representative, normalizedHomeGrid)] : [];
-    });
+  const rankedCards = rankedBands.map(({ card }, index) =>
+    withCardType(card, index === 0 ? "best" : "watch")
+  );
+  const nearby = findNearbyOpportunities(
+    { homeGrid: normalizedHomeGrid },
+    currentSpots,
+    undefined,
+    now,
+  );
   const watchNextBands = [...rankedBands].sort((left, right) =>
     compareWatchNextBandStats(
       left.stats,
@@ -166,12 +190,12 @@ export function buildOpportunitySnapshotWithDebug(
     normalizedHomeContinent ?? null,
     normalizedHomeGrid,
     dxRarity,
-    options.solar ?? null,
+    solar,
   );
   const dxOpportunity = selectDxOpportunityCard(
     dxCandidates,
     rankedCards[0] ?? null,
-    watchNextBands[0]?.card ?? null,
+    watchNextBands[0]?.card ? withCardType(watchNextBands[0].card, "watch") : null,
   );
 
   const snapshot = {
@@ -181,9 +205,9 @@ export function buildOpportunitySnapshotWithDebug(
     watchNext: watchNextBands
       .filter(({ card }) => card.id !== (rankedCards[0]?.id ?? ""))
       .slice(0, 3)
-      .map(({ card }) => card),
-    dxOpportunity,
-    nearbyActivity: portableCards.slice(0, 3),
+      .map(({ card }) => withCardType(card, "watch")),
+    dxOpportunity: dxOpportunity ? withCardType(dxOpportunity, "dx") : null,
+    nearbyActivity: nearby.cards.slice(0, 3),
   };
 
   return {
@@ -262,6 +286,8 @@ function buildBandStats(
   homeGrid: string | undefined,
   pskByBand: ReadonlyMap<string, PskBandSummary>,
   pskTrends: PskBandTrendMap,
+  bandPredictions: BandPredictionMap,
+  propagationDensity: PropagationDensityMap,
 ): BandStats[] {
   const bands = new Map<string, StoredOpportunitySpot[]>();
   const previousCounts = new Map<string, number>();
@@ -295,6 +321,8 @@ function buildBandStats(
     const dominantDxContinent = getDominantDxContinent(bandSpots);
     const pskBand = pskByBand.get(bandKey) ?? emptyPskBandSummary();
     const pskTrend = pskTrends[bandKey as keyof PskBandTrendMap] ?? null;
+    const prediction = bandPredictions[bandKey as keyof BandPredictionMap] ?? null;
+    const density = propagationDensity[bandKey as keyof PropagationDensityMap] ?? null;
     const roughRegionLabel = getRoughRegionLabel(
       dominantDxContinent,
       directionalCluster.dominantDirection,
@@ -334,6 +362,14 @@ function buildBandStats(
       ),
       pskTrendLabel: pskTrend?.trend ?? "steady",
       pskTrendConfidence: pskTrend?.confidence ?? null,
+      predictedBandState: prediction?.state ?? "stable",
+      predictedBandScore: prediction?.score ?? 0.5,
+      predictorSignals: prediction?.signals ?? [],
+      propagationDirectionConfidence: density?.confidence ?? "Low",
+      propagationBeamHeading: typeof density?.beamHeading === "number" ? density.beamHeading : null,
+      propagationDirectionBucket: density?.dominantDirection ?? null,
+      propagationSector: density?.sector ?? null,
+      propagationSignals: buildPropagationSignals(density),
       spots: bandSpots,
       modeFamilyCounts,
       representative: selectRepresentativeSpot(bandSpots),
@@ -345,21 +381,48 @@ function createOpportunityCard(
   stats: BandStats,
   representative: StoredOpportunitySpot = stats.representative,
   homeGrid?: string,
+  solar: SolarConditions | null = null,
+  now = Date.now(),
 ): OpportunityCard {
   const score = scoreBand(stats);
   const pathEstimate = getRepresentativePathEstimate(representative, homeGrid);
+  const modeSummary = getModeSummary(stats, representative);
+  const entity = getEntityName(representative.countryCode);
+  const freshnessSeconds = getFreshnessSeconds(representative, now);
+  const activityLevel = getActivityLevel(stats);
+  const bandState = getBandState(stats);
+  const portableType = getPortableType(representative.tags);
+  const signals = buildSignals(stats, representative, modeSummary, portableType);
+  const why = buildWhy(stats, representative, solar, modeSummary, portableType);
 
   return {
     id: `${stats.bandKey}:${representative.spottedCallsign}`,
     callsign: representative.spottedCallsign,
+    entity,
     band: representative.band,
     frequencyKHz: representative.frequencyKHz,
+    frequencyMhz: formatFrequencyMhz(representative.frequencyKHz),
     summary: buildCardSummary(stats),
     countryCode: representative.countryCode,
     direction: pathEstimate ? getDirectionLabel(pathEstimate.direction) : undefined,
     bearing: pathEstimate ? pathEstimate.bearingDegrees : undefined,
+    beamHeading: pathEstimate ? pathEstimate.bearingDegrees : stats.propagationBeamHeading ?? undefined,
+    directionConfidence: stats.propagationDirectionConfidence,
     region: stats.roughRegionLabel ?? undefined,
     confidence: stats.confidence,
+    confidenceReason: getConfidenceReason(stats, solar),
+    activityLevel,
+    bandState,
+    freshnessSeconds,
+    actionLine: buildActionLine(stats, representative, pathEstimate, modeSummary, portableType),
+    signals,
+    why,
+    modeSummary,
+    distanceKm: pathEstimate ? Math.round(pathEstimate.distanceKm) : undefined,
+    trendLabel: getTrendLabel(stats),
+    portable: portableType !== undefined,
+    portableType,
+    regional: pathEstimate ? pathEstimate.distanceKm <= 1500 : undefined,
     tags: representative.tags,
     score,
   };
@@ -413,6 +476,18 @@ function compareWatchNextBandStats(
   rightCard: OpportunityCard,
   operatingStyle: "dx" | undefined,
 ): number {
+  if (left.propagationDirectionConfidence !== right.propagationDirectionConfidence) {
+    return compareDirectionConfidence(right.propagationDirectionConfidence) - compareDirectionConfidence(left.propagationDirectionConfidence);
+  }
+
+  if (left.predictedBandState !== right.predictedBandState) {
+    return comparePredictedBandState(right.predictedBandState) - comparePredictedBandState(left.predictedBandState);
+  }
+
+  if (right.predictedBandScore !== left.predictedBandScore) {
+    return right.predictedBandScore - left.predictedBandScore;
+  }
+
   const leftIncreasing = left.activityTrend > 0 || left.pskTrendRising ? 1 : 0;
   const rightIncreasing = right.activityTrend > 0 || right.pskTrendRising ? 1 : 0;
 
@@ -736,6 +811,10 @@ function compareDxBandStats(
   rightCard: OpportunityCard,
   operatingStyle: "dx" | undefined,
 ): number {
+  if (left.propagationDirectionConfidence !== right.propagationDirectionConfidence) {
+    return compareDirectionConfidence(right.propagationDirectionConfidence) - compareDirectionConfidence(left.propagationDirectionConfidence);
+  }
+
   const leftOffContinent = left.offContinentSpots;
   const rightOffContinent = right.offContinentSpots;
 
@@ -847,6 +926,348 @@ function buildDxReasonSummary(
   return `${callsign} active now`;
 }
 
+function withCardType(
+  card: OpportunityCard,
+  cardType: OpportunityCard["cardType"],
+): OpportunityCard {
+  return {
+    ...card,
+    cardType,
+  };
+}
+
+function getModeSummary(
+  stats: BandStats,
+  representative: StoredOpportunitySpot,
+): string {
+  const hasFt8 = representative.tags.includes("FT8") || representative.mode === "ft8";
+  const hasFt4 = representative.tags.includes("FT4") || representative.mode === "ft4";
+  const activeModes = countActiveModeFamilies(stats.modeFamilyCounts);
+
+  if (stats.dominantModeFamily === "digital") {
+    if (hasFt8 && hasFt4) {
+      return "FT8/FT4 strong";
+    }
+
+    if (hasFt8) {
+      return "FT8 strong";
+    }
+
+    if (hasFt4) {
+      return "FT4 active";
+    }
+
+    return "Digital modes active";
+  }
+
+  if (stats.dominantModeFamily === "phone") {
+    return "SSB likely good";
+  }
+
+  if (stats.dominantModeFamily === "cw") {
+    return "CW possible";
+  }
+
+  if (activeModes >= 2) {
+    return "Mixed mode opportunity";
+  }
+
+  return "Mixed signals";
+}
+
+function getActivityLevel(stats: BandStats): "High" | "Moderate" | "Low" {
+  if (stats.totalSpots >= 12 || stats.uniqueCallsigns >= 8 || stats.pskCurrent >= 80) {
+    return "High";
+  }
+
+  if (stats.totalSpots >= 5 || stats.uniqueCallsigns >= 4 || stats.pskCurrent >= 25) {
+    return "Moderate";
+  }
+
+  return "Low";
+}
+
+function getBandState(stats: BandStats): "Opening" | "Stable" | "Fading" {
+  if (stats.predictedBandState === "opening") {
+    return "Opening";
+  }
+
+  if (stats.predictedBandState === "fading") {
+    return "Fading";
+  }
+
+  if (stats.pskTrendLabel === "rising" || stats.activityTrend > 0) {
+    return "Opening";
+  }
+
+  if (stats.pskTrendLabel === "falling" || stats.activityTrend < 0) {
+    return "Fading";
+  }
+
+  return "Stable";
+}
+
+function getTrendLabel(stats: BandStats): "Rising" | "Steady" | "Falling" {
+  if (stats.predictedBandState === "opening") {
+    return "Rising";
+  }
+
+  if (stats.predictedBandState === "fading") {
+    return "Falling";
+  }
+
+  if (stats.pskTrendLabel === "rising") {
+    return "Rising";
+  }
+
+  if (stats.pskTrendLabel === "falling") {
+    return "Falling";
+  }
+
+  return "Steady";
+}
+
+function getFreshnessSeconds(
+  representative: StoredOpportunitySpot,
+  now: number,
+): number {
+  return Math.max(0, Math.round((now - getSpotSortTime(representative)) / 1000));
+}
+
+function buildSignals(
+  stats: BandStats,
+  representative: StoredOpportunitySpot,
+  modeSummary: string,
+  portableType: "SOTA" | "POTA" | "Portable" | undefined,
+): readonly string[] {
+  const signals: string[] = [];
+
+  signals.push(
+    stats.totalSpots >= 10 || stats.uniqueCallsigns >= 7
+      ? "Cluster strong"
+      : stats.totalSpots >= 4
+        ? "Cluster active"
+        : "Cluster light",
+  );
+
+  if (stats.pskTrendLabel === "rising") {
+    signals.push("PSK rising");
+  } else if (stats.pskCurrent > 0) {
+    signals.push("PSK steady");
+  }
+
+  for (const signal of stats.predictorSignals) {
+    if (!signals.includes(signal)) {
+      signals.push(signal);
+    }
+  }
+
+  for (const signal of stats.propagationSignals) {
+    if (!signals.includes(signal)) {
+      signals.push(signal);
+    }
+  }
+
+  if (stats.dominantDirection) {
+    signals.push(`${toShortDirection(stats.dominantDirection)} opening`);
+  }
+
+  signals.push(modeSummary);
+
+  if (portableType) {
+    signals.push(portableType === "Portable" ? "Portable nearby" : `${portableType} nearby`);
+  }
+
+  if (representative.countryCode && representative.countryCode !== "US" && representative.countryCode !== "IE") {
+    signals.push("Rare DX active");
+  }
+
+  return signals.slice(0, 5);
+}
+
+function buildWhy(
+  stats: BandStats,
+  representative: StoredOpportunitySpot,
+  solar: SolarConditions | null,
+  modeSummary: string,
+  portableType: "SOTA" | "POTA" | "Portable" | undefined,
+): readonly string[] {
+  const why = [
+    `${stats.totalSpots} recent spots`,
+    `${stats.uniqueCallsigns} unique calls`,
+  ];
+
+  if (stats.pskCurrent >= 20) {
+    why.push("PSK confirms activity");
+  }
+
+  if (stats.dominantDirection) {
+    why.push(`Opening to ${stats.dominantDirection}`);
+  }
+
+  const muf = getSolarMuf(solar);
+  if (muf !== null && representative.band && bandLooksSupportedByMuf(representative.band, muf)) {
+    why.push(`MUF supports ${representative.band}`);
+  }
+
+  if (portableType) {
+    why.push(
+      portableType === "Portable"
+        ? "Portable station in range"
+        : `${portableType} station in range`,
+    );
+  } else {
+    why.push(modeSummary);
+  }
+
+  return why.slice(0, 5);
+}
+
+function getConfidenceReason(
+  stats: BandStats,
+  solar: SolarConditions | null,
+): string {
+  const muf = getSolarMuf(solar);
+
+  if (stats.propagationDirectionConfidence === "High" && stats.pskCurrent >= 20) {
+    return "Cluster + PSK path agree";
+  }
+
+  if (stats.pskCurrent >= 20 && stats.totalSpots >= 8) {
+    return "Cluster + PSK agree";
+  }
+
+  if (muf !== null && bandLooksSupportedByMuf(stats.bandKey, muf) && stats.totalSpots >= 5) {
+    return "Solar and spot activity align";
+  }
+
+  if (stats.totalSpots >= 5) {
+    return "Activity good, path less certain";
+  }
+
+  return "Fresh spots but limited PSK support";
+}
+
+function buildActionLine(
+  stats: BandStats,
+  representative: StoredOpportunitySpot,
+  pathEstimate: PathEstimate | undefined,
+  modeSummary: string,
+  portableType: "SOTA" | "POTA" | "Portable" | undefined,
+): string {
+  const band = representative.band ?? stats.bandKey;
+  const frequency = formatFrequencyMhz(representative.frequencyKHz);
+  const direction = pathEstimate ? toShortDirection(getDirectionLabel(pathEstimate.direction)) : null;
+
+  if (portableType) {
+    return `Listen for nearby ${portableType.toLowerCase()} activity on ${band}`;
+  }
+
+  if (direction && pathEstimate) {
+    return `Point beam ${direction} and listen around ${frequency}`;
+  }
+
+  if (direction) {
+    return `Try ${band} to the ${getDirectionLabel(pathEstimate?.direction ?? stats.dominantDirectionBucket ?? "E")} now`;
+  }
+
+  if (modeSummary.startsWith("SSB")) {
+    return `Listen around ${frequency} for SSB activity`;
+  }
+
+  return `Check ${band} around ${frequency} now`;
+}
+
+function getPortableType(
+  tags: readonly ParsedSpot["tags"][number][],
+): "SOTA" | "POTA" | "Portable" | undefined {
+  if (tags.includes("SOTA")) {
+    return "SOTA";
+  }
+
+  if (tags.includes("POTA")) {
+    return "POTA";
+  }
+
+  if (tags.includes("WWFF") || tags.includes("/P")) {
+    return "Portable";
+  }
+
+  return undefined;
+}
+
+function formatFrequencyMhz(frequencyKHz: number): string {
+  return `${(frequencyKHz / 1000).toFixed(3)} MHz`;
+}
+
+function getEntityName(countryCode: string | undefined): string | undefined {
+  if (!countryCode) {
+    return undefined;
+  }
+
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" }).of(countryCode.toUpperCase()) ?? countryCode.toUpperCase();
+  } catch {
+    return countryCode.toUpperCase();
+  }
+}
+
+function toShortDirection(direction: string): string {
+  const labels: Record<string, string> = {
+    North: "N",
+    "North-East": "NE",
+    East: "E",
+    "South-East": "SE",
+    South: "S",
+    "South-West": "SW",
+    West: "W",
+    "North-West": "NW",
+  };
+
+  return labels[direction] ?? direction;
+}
+
+function bandLooksSupportedByMuf(bandKey: string, muf: number): boolean {
+  if (bandKey === "10m") {
+    return muf >= 28;
+  }
+
+  if (bandKey === "15m") {
+    return muf >= 21;
+  }
+
+  if (bandKey === "17m") {
+    return muf >= 18;
+  }
+
+  if (bandKey === "20m") {
+    return muf >= 14;
+  }
+
+  return true;
+}
+
+function buildPropagationSignals(
+  density: PropagationDensityMap[keyof PropagationDensityMap] | null,
+): readonly string[] {
+  if (!density || !density.dominantDirection) {
+    return [];
+  }
+
+  const signals: string[] = [];
+  const label = density.sector ?? density.dominantDirection;
+
+  if (density.confidence === "High") {
+    signals.push(`${label} propagation strongest`);
+  } else if (density.confidence === "Medium") {
+    signals.push(`${label} paths building`);
+  } else {
+    signals.push(`${label} signals spreading`);
+  }
+
+  return signals;
+}
+
 function isDuplicateOpportunity(
   left: OpportunityCard,
   right: OpportunityCard | null,
@@ -931,20 +1352,6 @@ function buildCardSummary(stats: BandStats): string {
   }
 
   return summaryParts.join(", ");
-}
-
-function selectPortableRepresentativeSpot(
-  spots: readonly StoredOpportunitySpot[],
-): StoredOpportunitySpot | null {
-  return selectPreferredRepresentativeSpot(spots, (spot) => isPortableSpot(spot));
-}
-
-function selectPreferredRepresentativeSpot(
-  spots: readonly StoredOpportunitySpot[],
-  predicate: (spot: StoredOpportunitySpot) => boolean,
-): StoredOpportunitySpot | null {
-  const preferredSpots = spots.filter(predicate);
-  return preferredSpots.length > 0 ? selectRepresentativeSpot(preferredSpots) : null;
 }
 
 function getSpotSortTime(spot: StoredOpportunitySpot): number {
@@ -1062,6 +1469,7 @@ function scoreCard(
 
   score += stats.dominantDirectionUniqueCallsigns * 20;
   score += Math.max(stats.directionSpread, 0) * 15;
+  score += getPropagationScoreBoost(stats);
   score += countActiveModeFamilies(stats.modeFamilyCounts) * 12;
   score += getPskScoreBoost(stats);
 
@@ -1073,6 +1481,22 @@ function scoreCard(
     if (stats.maxDistanceKm !== null) {
       score += Math.round(stats.maxDistanceKm / 250);
     }
+  }
+
+  return score;
+}
+
+function getPropagationScoreBoost(stats: BandStats): number {
+  let score = 0;
+
+  if (stats.propagationDirectionConfidence === "High") {
+    score += 24;
+  } else if (stats.propagationDirectionConfidence === "Medium") {
+    score += 12;
+  }
+
+  if (stats.propagationSector) {
+    score += 10;
   }
 
   return score;
@@ -1293,6 +1717,30 @@ function compareTrendLabel(value: "rising" | "steady" | "falling"): number {
   }
 
   if (value === "steady") {
+    return 1;
+  }
+
+  return 0;
+}
+
+function comparePredictedBandState(value: "opening" | "stable" | "fading"): number {
+  if (value === "opening") {
+    return 2;
+  }
+
+  if (value === "stable") {
+    return 1;
+  }
+
+  return 0;
+}
+
+function compareDirectionConfidence(value: "High" | "Medium" | "Low"): number {
+  if (value === "High") {
+    return 2;
+  }
+
+  if (value === "Medium") {
     return 1;
   }
 
