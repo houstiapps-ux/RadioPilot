@@ -3,9 +3,9 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import {
-  buildOpportunitySnapshotWithDebug,
+  buildOpportunitySnapshotFromInputs,
   type OpportunityCard,
-  type OpportunityDebugSnapshot,
+  type OpportunityEngineInputs,
   type OpportunitySnapshot,
   type PskBandTrendMap,
   type PskReporterSummary,
@@ -41,8 +41,8 @@ interface OpportunitySnapshotFixture {
     readonly psk: {
       readonly summary: PskReporterSummary | null;
       readonly trends: PskBandTrendMap;
-      readonly bandPredictions: NonNullable<Parameters<typeof buildOpportunitySnapshotWithDebug>[1]>["bandPredictions"];
-      readonly propagationDensity: NonNullable<Parameters<typeof buildOpportunitySnapshotWithDebug>[1]>["propagationDensity"];
+      readonly bandPredictions: OpportunityEngineInputs["bandPredictions"];
+      readonly propagationDensity: OpportunityEngineInputs["propagationDensity"];
     };
     readonly dx: {
       readonly bandResolution: {
@@ -51,32 +51,37 @@ interface OpportunitySnapshotFixture {
         readonly unresolvedBand: number;
       };
       readonly rarityGeneratedAt?: string;
-      readonly events: NonNullable<Parameters<typeof buildOpportunitySnapshotWithDebug>[1]>["dxEvents"];
+      readonly events: OpportunityEngineInputs["dxEvents"];
     };
-    readonly spots: Parameters<typeof buildOpportunitySnapshotWithDebug>[0];
+    readonly spots: OpportunityEngineInputs["spots"];
   };
   readonly output?: {
     readonly snapshot: OpportunitySnapshot;
-    readonly debug: OpportunityDebugSnapshot;
+    readonly debug: ReturnType<typeof buildOpportunitySnapshotFromInputs>;
   };
 }
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const fixture = await loadFixture(options.fixturePath);
-  const debug = buildOpportunitySnapshotWithDebug(fixture.input.spots, {
+  const debug = buildOpportunitySnapshotFromInputs({
     now: Date.parse(fixture.capturedAt),
+    rawSpots: [],
+    spots: fixture.input.spots,
+    solar: fixture.input.solar,
+    pskSummary: fixture.input.psk.summary,
+    pskTrends: fixture.input.psk.trends,
+    bandPredictions: fixture.input.psk.bandPredictions ?? {},
+    propagationDensity: fixture.input.psk.propagationDensity ?? {},
+    dxRarity: null,
+    dxEvents: fixture.input.dx.events ?? [],
+    bandResolution: fixture.input.dx.bandResolution,
+  }, {
     homeGrid: fixture.userProfile.homeGrid,
     operatingStyle: fixture.userProfile.operatingStyle,
     chasing: fixture.filters.chasing,
     modeFilter: fixture.filters.mode,
     bandScope: fixture.filters.bandScope,
-    solar: fixture.input.solar,
-    pskSummary: fixture.input.psk.summary,
-    pskTrends: fixture.input.psk.trends,
-    dxEvents: fixture.input.dx.events ?? [],
-    bandPredictions: fixture.input.psk.bandPredictions ?? {},
-    propagationDensity: fixture.input.psk.propagationDensity ?? {},
   });
 
   const summary = {

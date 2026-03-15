@@ -4,18 +4,16 @@ import dotenv from "dotenv";
 import Fastify from "fastify";
 
 import {
-  predictBandOpenings,
-  buildOpportunitySnapshotWithDebug,
-  detectDxEvents,
+  buildOpportunitySnapshotFromInputs,
   findNearbyOpportunities,
-  getDirectionalPropagation,
-  loadDxRarityContext,
   getAllBandTrends,
+  getDirectionalPropagation,
+  loadOpportunityEngineInputs,
+  OPPORTUNITY_RECENT_WINDOW_MS,
   parseMaidenheadLocator,
   parseStoredOpportunitySpot,
-  summarizeStoredSpotBandResolution,
-  type PskBandTrendMap,
-  type PskReporterSummary,
+  RedisOpportunityStorage,
+  type OpportunityEngineInputs,
   type SolarConditions,
   type OpportunitySnapshot,
 } from "@radio-pilot/shared";
@@ -26,7 +24,6 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
 
-const RECENT_WINDOW_MS = 15 * 60 * 1000;
 const FILTER_CACHE_REFRESH_MS = 5_000;
 const FILTER_CACHE_MAX_STALE_MS = 30_000;
 const port = Number(process.env.PORT ?? "3000");
@@ -37,28 +34,15 @@ const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
 const app = Fastify({ logger: false });
 const redis = createClient({ url: redisUrl });
-
-interface CachedOpportunityInputs {
-  readonly now: number;
-  readonly rawSpots: readonly string[];
-  readonly spots: ReturnType<typeof parseStoredOpportunitySpot>[number][];
-  readonly solar: SolarConditions | null;
-  readonly pskSummary: PskReporterSummary | null;
-  readonly pskTrends: PskBandTrendMap;
-  readonly bandPredictions: Awaited<ReturnType<typeof predictBandOpenings>>;
-  readonly propagationDensity: Awaited<ReturnType<typeof getDirectionalPropagation>>;
-  readonly dxRarity: Awaited<ReturnType<typeof loadDxRarityContext>>;
-  readonly dxEvents: Awaited<ReturnType<typeof detectDxEvents>>;
-  readonly bandResolution: ReturnType<typeof summarizeStoredSpotBandResolution>;
-}
+const opportunityStorage = new RedisOpportunityStorage(redis);
 
 let cachedOpportunityInputs:
   | {
       readonly expiresAt: number;
-      readonly value: CachedOpportunityInputs;
+      readonly value: OpportunityEngineInputs;
     }
   | null = null;
-let cachedOpportunityInputsPending: Promise<CachedOpportunityInputs> | null = null;
+let cachedOpportunityInputsPending: Promise<OpportunityEngineInputs> | null = null;
 
 const emptySnapshot = (): OpportunitySnapshot => ({
   generatedAt: new Date(0).toISOString(),
@@ -172,7 +156,7 @@ app.get("/debug/nearby", async (request) => {
   }
 
   const now = Date.now();
-  const rawSpots = await redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS, now);
+  const rawSpots = await redis.zRangeByScore("spots:recent", now - OPPORTUNITY_RECENT_WINDOW_MS, now);
   const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
   const nearby = findNearbyOpportunities({ homeGrid }, spots, undefined, now);
 
@@ -183,7 +167,7 @@ app.get("/debug/nearby", async (request) => {
 
 app.get("/debug/bands", async (_request) => {
   return {
-    bands: await predictBandOpenings(redis, {}),
+    bands: await opportunityStorage.getBandPredictions({}),
   };
 });
 
@@ -246,19 +230,6 @@ function parseSolar(value: string | null): SolarConditions | null {
   }
 
   return null;
-}
-
-function parsePskSummary(value: string | null): PskReporterSummary | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(value) as PskReporterSummary;
-    return Array.isArray(parsed.bands) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function parsePskMetrics(value: string | null): {
@@ -463,26 +434,14 @@ async function buildPersonalizedSnapshot(
 async function buildPersonalizedSnapshotDebug(
   query: unknown,
   source: "api" | "debug-opportunities" | "debug" = "debug-opportunities",
-): Promise<ReturnType<typeof buildOpportunitySnapshotWithDebug>> {
+): Promise<ReturnType<typeof buildOpportunitySnapshotFromInputs>> {
   const homeGrid = getHomeGridFromQuery(query);
   const operatingStyle = getOperatingStyleFromQuery(query);
   const chasing = getChasingFromQuery(query);
   const modeFilter = getModeFilterFromQuery(query);
   const bandScope = getBandScopeFromQuery(query);
   const baseInputs = await getCachedOpportunityInputs();
-  const {
-    now,
-    rawSpots,
-    spots,
-    solar,
-    pskSummary,
-    pskTrends,
-    bandPredictions,
-    propagationDensity,
-    dxRarity,
-    dxEvents,
-    bandResolution,
-  } = baseInputs;
+  const { spots, solar, bandResolution } = baseInputs;
 
   if (spots.length === 0) {
     const empty = {
@@ -500,30 +459,18 @@ async function buildPersonalizedSnapshotDebug(
     };
   }
 
-  const built = buildOpportunitySnapshotWithDebug(spots, {
-    now,
+  const built = buildOpportunitySnapshotFromInputs(baseInputs, {
     homeGrid,
     operatingStyle,
     chasing,
     modeFilter,
     bandScope,
-    pskSummary: isFreshPskSummary(pskSummary, now) ? pskSummary : null,
-    pskTrends: filterFreshPskTrends(pskTrends, now),
-    dxRarity,
-    dxEvents,
-    solar,
-    bandPredictions,
-    propagationDensity,
   });
-  const snapshot = {
-    ...built.snapshot,
-    solar,
-  };
 
-  return { ...built, snapshot, bandResolution };
+  return { ...built, bandResolution };
 }
 
-async function getCachedOpportunityInputs(): Promise<CachedOpportunityInputs> {
+async function getCachedOpportunityInputs(): Promise<OpportunityEngineInputs> {
   const now = Date.now();
 
   if (cachedOpportunityInputs) {
@@ -570,34 +517,8 @@ function triggerOpportunityInputsRefresh(now: number): void {
     });
 }
 
-async function loadOpportunityInputs(now: number): Promise<CachedOpportunityInputs> {
-  const [rawSpots, rawSolar, rawPsk, pskTrends, bandPredictions, propagationDensity] = await Promise.all([
-    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
-    redis.get("solar:latest"),
-    redis.get("psk:summary"),
-    getAllBandTrends(redis),
-    predictBandOpenings(redis, {}),
-    getDirectionalPropagation(redis, {}),
-  ]);
-  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
-  const dxRarity = await loadDxRarityContext(redis, spots, now);
-  const dxEvents = await detectDxEvents(spots, redis, now, { rarity: dxRarity });
-  const solar = parseSolar(rawSolar);
-  const pskSummary = parsePskSummary(rawPsk);
-
-  return {
-    now,
-    rawSpots,
-    spots,
-    solar,
-    pskSummary,
-    pskTrends,
-    bandPredictions,
-    propagationDensity,
-    dxRarity,
-    dxEvents,
-    bandResolution: summarizeStoredSpotBandResolution(rawSpots),
-  };
+async function loadOpportunityInputs(now: number): Promise<OpportunityEngineInputs> {
+  return loadOpportunityEngineInputs(opportunityStorage, { now });
 }
 
 function getChasingFromQuery(
@@ -650,22 +571,6 @@ function getBandScopeFromQuery(
 
   const normalized = bandScope.trim().toLowerCase();
   return normalized === "hf" || normalized === "vhf-uhf" ? normalized : undefined;
-}
-
-function isFreshPskSummary(summary: PskReporterSummary | null, now: number): boolean {
-  if (!summary) {
-    return false;
-  }
-
-  const freshness = Date.parse(summary.freshnessTimestamp);
-  return Number.isFinite(freshness) && freshness >= now - RECENT_WINDOW_MS * 2;
-}
-
-function filterFreshPskTrends(
-  trends: PskBandTrendMap,
-  _now: number,
-): PskBandTrendMap {
-  return trends;
 }
 
 function deriveSolarGuidance(solar: SolarConditions): Pick<SolarConditions, "favouredBands" | "solarSummary"> {

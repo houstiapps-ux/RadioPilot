@@ -5,15 +5,10 @@ import dotenv from "dotenv";
 import { createClient } from "redis";
 
 import {
-  buildOpportunitySnapshotWithDebug,
-  detectDxEvents,
-  getAllBandTrends,
-  getDirectionalPropagation,
-  loadDxRarityContext,
+  buildOpportunitySnapshotFromInputs,
+  loadOpportunityEngineInputs,
   parseMaidenheadLocator,
-  parseStoredOpportunitySpot,
-  predictBandOpenings,
-  summarizeStoredSpotBandResolution,
+  RedisOpportunityStorage,
   type OpportunitySnapshot,
   type PskBandTrendMap,
   type PskReporterSummary,
@@ -26,7 +21,6 @@ const repoRoot = path.resolve(__dirname, "../../../../");
 
 dotenv.config({ path: path.resolve(repoRoot, ".env"), quiet: true });
 
-const RECENT_WINDOW_MS = 15 * 60 * 1000;
 const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
 type ChasingFilter = "dx" | "pota" | "sota" | "portable" | "digital";
@@ -59,19 +53,23 @@ interface OpportunitySnapshotFixture {
     readonly psk: {
       readonly summary: PskReporterSummary | null;
       readonly trends: PskBandTrendMap;
-      readonly bandPredictions: Awaited<ReturnType<typeof predictBandOpenings>>;
-      readonly propagationDensity: Awaited<ReturnType<typeof getDirectionalPropagation>>;
+      readonly bandPredictions: Awaited<ReturnType<RedisOpportunityStorage["getBandPredictions"]>>;
+      readonly propagationDensity: Awaited<ReturnType<RedisOpportunityStorage["getDirectionalSummaries"]>>;
     };
     readonly dx: {
-      readonly bandResolution: ReturnType<typeof summarizeStoredSpotBandResolution>;
+      readonly bandResolution: {
+        readonly sourceBandMissing: number;
+        readonly frequencyDerivedBandUsed: number;
+        readonly unresolvedBand: number;
+      };
       readonly rarityGeneratedAt?: string;
-      readonly events: Awaited<ReturnType<typeof detectDxEvents>>;
+      readonly events: Awaited<ReturnType<RedisOpportunityStorage["getDxEvents"]>>;
     };
-    readonly spots: ReturnType<typeof parseStoredOpportunitySpot>[number][];
+    readonly spots: Awaited<ReturnType<RedisOpportunityStorage["getRecentSpots"]>>["parsed"];
   };
   readonly output: {
     readonly snapshot: OpportunitySnapshot;
-    readonly debug: ReturnType<typeof buildOpportunitySnapshotWithDebug>;
+    readonly debug: ReturnType<typeof buildOpportunitySnapshotFromInputs>;
   };
 }
 
@@ -80,36 +78,19 @@ async function main(): Promise<void> {
   const now = Date.now();
   const redis = createClient({ url: redisUrl });
   await redis.connect();
+  const storage = new RedisOpportunityStorage(redis);
 
   try {
-    const [rawSpots, rawSolar, rawPsk, pskTrends, bandPredictions, propagationDensity] = await Promise.all([
-      redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
-      redis.get("solar:latest"),
-      redis.get("psk:summary"),
-      getAllBandTrends(redis),
-      predictBandOpenings(redis, {}),
-      getDirectionalPropagation(redis, {}),
-    ]);
-
-    const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
-    const dxRarity = await loadDxRarityContext(redis, spots, now);
-    const dxEvents = await detectDxEvents(spots, redis, now, { rarity: dxRarity });
-    const solar = parseSolar(rawSolar);
-    const pskSummary = parsePskSummary(rawPsk);
-    const debug = buildOpportunitySnapshotWithDebug(spots, {
+    const inputs = await loadOpportunityEngineInputs(storage, {
       now,
+      homeGrid: options.homeGrid,
+    });
+    const debug = buildOpportunitySnapshotFromInputs(inputs, {
       homeGrid: options.homeGrid,
       operatingStyle: options.operatingStyle,
       chasing: options.chasing,
       modeFilter: options.modeFilter,
       bandScope: options.bandScope,
-      solar,
-      pskSummary,
-      pskTrends,
-      dxRarity,
-      dxEvents,
-      bandPredictions,
-      propagationDensity,
     });
 
     const fixture: OpportunitySnapshotFixture = {
@@ -125,19 +106,19 @@ async function main(): Promise<void> {
         bandScope: options.bandScope,
       },
       input: {
-        solar,
+        solar: inputs.solar,
         psk: {
-          summary: pskSummary,
-          trends: pskTrends,
-          bandPredictions,
-          propagationDensity,
+          summary: inputs.pskSummary,
+          trends: inputs.pskTrends,
+          bandPredictions: inputs.bandPredictions,
+          propagationDensity: inputs.propagationDensity,
         },
         dx: {
-          bandResolution: summarizeStoredSpotBandResolution(rawSpots),
-          rarityGeneratedAt: new Date(dxRarity.generatedAt).toISOString(),
-          events: dxEvents,
+          bandResolution: inputs.bandResolution,
+          rarityGeneratedAt: inputs.dxRarity ? new Date(inputs.dxRarity.generatedAt).toISOString() : undefined,
+          events: inputs.dxEvents,
         },
-        spots,
+        spots: inputs.spots,
       },
       output: {
         snapshot: debug.snapshot,
@@ -235,46 +216,6 @@ function normalizeOutputName(value: string | undefined): string | undefined {
 function buildOutputName(now: number, name: string | undefined): string {
   const timestamp = new Date(now).toISOString().replaceAll(":", "-");
   return name ? `${timestamp}-${name}.json` : `${timestamp}.json`;
-}
-
-function parseSolar(value: string | null): SolarConditions | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(value) as Partial<SolarConditions>;
-    return typeof parsed.updatedAt === "string"
-      ? {
-        sfi: typeof parsed.sfi === "number" ? parsed.sfi : undefined,
-        kp: typeof parsed.kp === "number" ? parsed.kp : undefined,
-        aIndex: typeof parsed.aIndex === "number" ? parsed.aIndex : undefined,
-        muf:
-          typeof parsed.muf === "number" || typeof parsed.muf === "string"
-            ? parsed.muf
-            : undefined,
-        sunspots: typeof parsed.sunspots === "number" ? parsed.sunspots : undefined,
-        updatedAt: parsed.updatedAt,
-        favouredBands: Array.isArray(parsed.favouredBands) ? parsed.favouredBands : undefined,
-        solarSummary: Array.isArray(parsed.solarSummary) ? parsed.solarSummary : undefined,
-      }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function parsePskSummary(value: string | null): PskReporterSummary | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(value) as PskReporterSummary;
-    return Array.isArray(parsed.bands) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 await main();
