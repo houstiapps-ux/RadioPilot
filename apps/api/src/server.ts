@@ -31,6 +31,16 @@ const emptySnapshot = (): OpportunitySnapshot => ({
 
 await redis.connect();
 
+app.addHook("onRequest", async (request, reply) => {
+  reply.header("Access-Control-Allow-Origin", "http://localhost:5173");
+  reply.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+  reply.header("Access-Control-Allow-Headers", "Content-Type");
+
+  if (request.method === "OPTIONS") {
+    reply.code(204).send();
+  }
+});
+
 app.get("/", async (_request, reply) => {
   reply.type("text/html; charset=utf-8");
   return renderIndexPage();
@@ -118,6 +128,11 @@ function renderIndexPage(): string {
         font-size: 2rem;
       }
 
+      p {
+        margin: 0 0 24px;
+        color: #4b4b4b;
+      }
+
       section {
         margin-bottom: 24px;
         padding: 16px;
@@ -144,8 +159,16 @@ function renderIndexPage(): string {
         font-weight: 700;
       }
 
+      .label {
+        display: inline-block;
+        min-width: 72px;
+        color: #6a6a6a;
+      }
+
+      .row,
       .meta,
       .summary,
+      .tags,
       .empty,
       .status {
         margin-top: 4px;
@@ -160,6 +183,7 @@ function renderIndexPage(): string {
   <body>
     <main>
       <h1>Radio Pilot</h1>
+      <p>Live view of current band activity from the local Radio Pilot backend.</p>
       <div id="status" class="status">Loading opportunities...</div>
       <section>
         <h2>Best Opportunity</h2>
@@ -188,26 +212,19 @@ function renderIndexPage(): string {
       const status = document.getElementById("status");
 
       function formatCard(card) {
+        const callsignRow = card.callsign
+          ? '<div class="row"><span class="label">Callsign</span>' + escapeHtml(card.callsign) + '</div>'
+          : "";
+        const tags = Array.isArray(card.tags) && card.tags.length > 0 ? card.tags.join(", ") : "None";
+
         return [
           '<article class="card">',
-          '<div class="callsign">' + escapeHtml(card.callsign) + '</div>',
-          '<div class="meta">' + escapeHtml(formatMeta(card)) + '</div>',
-          '<div class="summary">' + escapeHtml(card.summary) + '</div>',
+          '<div class="row"><span class="label">Band</span>' + escapeHtml(card.band ?? "Unknown") + "</div>",
+          callsignRow,
+          '<div class="row summary"><span class="label">Summary</span>' + escapeHtml(card.summary) + "</div>",
+          '<div class="row tags"><span class="label">Tags</span>' + escapeHtml(tags) + "</div>",
           "</article>",
         ].join("");
-      }
-
-      function formatMeta(card) {
-        const parts = [];
-
-        if (card.band) {
-          parts.push(card.band);
-        }
-
-        parts.push(card.frequencyKHz.toFixed(1) + " kHz");
-        parts.push("score " + card.score);
-
-        return parts.join(" • ");
       }
 
       function renderList(element, cards) {
@@ -239,7 +256,7 @@ function renderIndexPage(): string {
 
       async function load() {
         try {
-          const response = await fetch("/api/opportunities");
+          const response = await fetch("http://localhost:3000/api/opportunities");
 
           if (!response.ok) {
             throw new Error("Request failed with status " + response.status);

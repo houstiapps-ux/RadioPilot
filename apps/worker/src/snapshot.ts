@@ -16,6 +16,8 @@ interface BandStats {
   readonly totalSpots: number;
   readonly uniqueCallsigns: number;
   readonly portableSpots: number;
+  readonly previousWindowSpots: number;
+  readonly activityTrend: number;
   readonly offContinentSpots: number | null;
   readonly dominantModeFamily: ModeFamilyKey;
   readonly dominantDxContinent: string | null;
@@ -38,7 +40,7 @@ export function startSnapshotLoop(redis: SnapshotRedisClient): void {
 
 async function publishSnapshot(redis: SnapshotRedisClient): Promise<void> {
   const now = Date.now();
-  const minScore = now - RECENT_WINDOW_MS;
+  const minScore = now - RECENT_WINDOW_MS * 2;
   await pruneRecentSortedSpots(redis, now);
   const rawSpots = await redis.zRangeByScore("spots:recent", minScore, now);
   const spots = rawSpots.flatMap(parseStoredSpot);
@@ -56,10 +58,20 @@ async function pruneRecentSortedSpots(
 }
 
 export function buildOpportunitySnapshot(
-  spots: readonly StoredSpot[],
+  allSpots: readonly StoredSpot[],
   now = Date.now(),
 ): OpportunitySnapshot {
-  const statsByBand = buildBandStats(spots);
+  const currentWindowStart = now - RECENT_WINDOW_MS;
+  const previousWindowStart = now - RECENT_WINDOW_MS * 2;
+  const currentSpots = allSpots.filter((spot) => {
+    const spotTime = getSpotSortTime(spot);
+    return spotTime >= currentWindowStart && spotTime <= now;
+  });
+  const previousSpots = allSpots.filter((spot) => {
+    const spotTime = getSpotSortTime(spot);
+    return spotTime >= previousWindowStart && spotTime < currentWindowStart;
+  });
+  const statsByBand = buildBandStats(currentSpots, previousSpots);
   const rankedBands = statsByBand
     .map((stats) => ({ stats, card: createOpportunityCard(stats) }))
     .sort((left, right) => compareCards(left.card, right.card));
@@ -69,13 +81,9 @@ export function buildOpportunitySnapshot(
       const representative = selectPortableRepresentativeSpot(stats.spots);
       return representative ? [createOpportunityCard(stats, representative)] : [];
     });
-  const uniqueRankedBands = [...rankedBands].sort((left, right) => {
-    if (right.stats.uniqueCallsigns !== left.stats.uniqueCallsigns) {
-      return right.stats.uniqueCallsigns - left.stats.uniqueCallsigns;
-    }
-
-    return compareCards(left.card, right.card);
-  });
+  const uniqueRankedBands = [...rankedBands].sort((left, right) =>
+    compareWatchNextBandStats(left.stats, right.stats, left.card, right.card),
+  );
   const dxRankedBands = [...rankedBands].sort((left, right) =>
     compareDxBandStats(left.stats, right.stats, left.card, right.card),
   );
@@ -87,16 +95,23 @@ export function buildOpportunitySnapshot(
     generatedAt: new Date(now).toISOString(),
     cards: rankedCards,
     bestOpportunity: rankedCards[0] ?? null,
-    watchNext: rankedCards.slice(1, 4),
+    watchNext: uniqueRankedBands
+      .filter(({ card }) => card.id !== (rankedCards[0]?.id ?? ""))
+      .slice(0, 3)
+      .map(({ card }) => card),
     dxOpportunity,
     nearbyActivity: portableCards.slice(0, 3),
   };
 }
 
-function buildBandStats(spots: readonly StoredSpot[]): BandStats[] {
+function buildBandStats(
+  currentSpots: readonly StoredSpot[],
+  previousSpots: readonly StoredSpot[],
+): BandStats[] {
   const bands = new Map<string, StoredSpot[]>();
+  const previousCounts = new Map<string, number>();
 
-  for (const spot of spots) {
+  for (const spot of currentSpots) {
     const bandKey = spot.band ?? "unknown";
     const existing = bands.get(bandKey);
 
@@ -107,11 +122,18 @@ function buildBandStats(spots: readonly StoredSpot[]): BandStats[] {
     }
   }
 
+  for (const spot of previousSpots) {
+    const bandKey = spot.band ?? "unknown";
+    previousCounts.set(bandKey, (previousCounts.get(bandKey) ?? 0) + 1);
+  }
+
   return [...bands.entries()].map(([bandKey, bandSpots]) => {
     const uniqueCallsigns = new Set(bandSpots.map((spot) => spot.spottedCallsign)).size;
     const portableSpots = bandSpots.filter(
       (spot) => isPortableSpot(spot),
     ).length;
+    const previousWindowSpots = previousCounts.get(bandKey) ?? 0;
+    const activityTrend = bandSpots.length - previousWindowSpots;
     const offContinentSpots = countOffContinentSpots(bandSpots);
     const modeFamilyCounts = countModeFamilies(bandSpots);
     const dominantModeFamily = getDominantModeFamily(modeFamilyCounts);
@@ -122,6 +144,8 @@ function buildBandStats(spots: readonly StoredSpot[]): BandStats[] {
       totalSpots: bandSpots.length,
       uniqueCallsigns,
       portableSpots,
+      previousWindowSpots,
+      activityTrend,
       offContinentSpots,
       dominantModeFamily,
       dominantDxContinent,
@@ -175,6 +199,26 @@ function compareCards(left: OpportunityCard, right: OpportunityCard): number {
   }
 
   return left.callsign.localeCompare(right.callsign);
+}
+
+function compareWatchNextBandStats(
+  left: BandStats,
+  right: BandStats,
+  leftCard: OpportunityCard,
+  rightCard: OpportunityCard,
+): number {
+  const leftIncreasing = left.activityTrend > 0 ? 1 : 0;
+  const rightIncreasing = right.activityTrend > 0 ? 1 : 0;
+
+  if (rightIncreasing !== leftIncreasing) {
+    return rightIncreasing - leftIncreasing;
+  }
+
+  if (right.activityTrend !== left.activityTrend) {
+    return right.activityTrend - left.activityTrend;
+  }
+
+  return compareCards(leftCard, rightCard);
 }
 
 async function runSnapshotLoop(redis: SnapshotRedisClient): Promise<void> {

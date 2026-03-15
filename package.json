@@ -5,7 +5,8 @@
   "packageManager": "pnpm@10.17.1",
   "scripts": {
     "api": "pnpm --filter @radio-pilot/api start",
-    "worker": "pnpm --filter @radio-pilot/worker start"
+    "worker": "pnpm --filter @radio-pilot/worker start",
+    "web": "pnpm --filter @radio-pilot/web dev"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
