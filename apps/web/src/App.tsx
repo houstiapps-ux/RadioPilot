@@ -543,12 +543,16 @@ function OperatorCard(props: {
         </div>
       </div>
 
-      <div className="operator-stats">
-        <StatPill label="Band" value={view.band} />
-        <StatPill label="Freq" value={formatFrequency(props.card.frequencyKHz)} />
-        <StatPill label="Dir" value={view.directionLine} />
-        <StatPill label="Beam" value={view.beamHeading} />
-        <ConfidenceMetaLine value={view.confidence} card={props.card} />
+      <div className="operator-meta">
+        <div className="operator-stats operator-stats-primary">
+          <StatPill label="Band" value={view.band} />
+          <StatPill label="Freq" value={formatFrequency(props.card.frequencyKHz)} />
+          <StatPill label="Dir" value={view.directionLine} />
+          <StatPill label="Beam" value={view.beamHeading} />
+        </div>
+        <div className="operator-stats operator-stats-secondary">
+          <ConfidenceMetaLine value={view.confidence} card={props.card} />
+        </div>
       </div>
 
       {props.card.pathStability ? (

@@ -526,11 +526,24 @@ body {
   line-height: 1;
 }
 
+.operator-meta {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .operator-stats {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
+}
+
+.operator-stats-primary {
+  align-items: center;
+}
+
+.operator-stats-secondary {
+  align-items: center;
 }
 
 .stat-pill {
@@ -586,16 +599,18 @@ body {
 }
 
 .confidence-meta {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
   min-height: 26px;
+  min-width: 0;
 }
 
 .confidence-line {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 2px;
   white-space: nowrap;
 }
 
@@ -611,7 +626,7 @@ body {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  padding: 0 2px;
+  min-width: 0;
 }
 
 .confidence-evidence-label {
