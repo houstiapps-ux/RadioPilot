@@ -156,7 +156,8 @@ app.get("/debug/bands", async (_request) => {
 
 app.get("/debug/propagation", async (request) => {
   const homeGrid = getHomeGridFromQuery(request.query);
-  return await getDirectionalPropagation(redis, { homeGrid });
+  const propagation = await getDirectionalPropagation(redis, { homeGrid });
+  return formatPropagationDebugResponse(propagation);
 });
 
 await app.listen({ port, host });
@@ -392,6 +393,31 @@ function getActivePskDirections(summary: unknown): string[] {
   }
 
   return [...directions];
+}
+
+function formatPropagationDebugResponse(
+  propagation: Awaited<ReturnType<typeof getDirectionalPropagation>>,
+): Record<string, {
+  dominantDirection?: string;
+  dominantSector: string | null;
+  heading?: number;
+  confidence: "High" | "Medium" | "Low";
+  densities: Record<string, number>;
+}> {
+  return Object.fromEntries(
+    Object.entries(propagation).map(([band, density]) => [
+      band,
+      {
+        dominantDirection: density.dominantDirection,
+        dominantSector: density.sector ?? null,
+        heading: density.heading ?? density.beamHeading,
+        confidence: density.confidence,
+        densities: Object.fromEntries(
+          Object.entries(density.densities).map(([direction, value]) => [direction, value ?? 0]),
+        ),
+      },
+    ]),
+  );
 }
 
 async function buildPersonalizedSnapshot(

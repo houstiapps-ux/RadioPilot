@@ -38,6 +38,7 @@ export interface OpportunityCard {
   readonly bearing?: number;
   readonly beamHeading?: number;
   readonly directionConfidence?: "High" | "Medium" | "Low";
+  readonly strongestPropagationSignal?: string;
   readonly region?: string;
   readonly confidence?: "Low" | "Medium" | "High";
   readonly confidenceReason?: string;
@@ -145,8 +146,10 @@ export interface BandPrediction {
 export type BandPredictionMap = Readonly<Partial<Record<Band, BandPrediction>>>;
 
 export interface PropagationBandDensity {
+  readonly direction?: "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
   readonly dominantDirection?: "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
-  readonly sector?: string;
+  readonly heading?: number;
+  readonly sector?: string | null;
   readonly beamHeading?: number;
   readonly confidence: "High" | "Medium" | "Low";
   readonly densities: Readonly<Partial<Record<MaidenheadPathEstimate["direction"], number>>>;

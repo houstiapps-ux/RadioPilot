@@ -22,7 +22,11 @@ test("generates four operator cards from Redis-backed signals", async () => {
   assert.ok(result.bestOpportunity);
   assert.equal(result.bestOpportunity?.band, "20m");
   assert.ok(result.bestOpportunity?.reason.length);
+  assert.equal(result.bestOpportunity?.directionConfidence, "High");
+  assert.ok(result.bestOpportunity?.signals?.some((signal) => signal.includes("propagation")));
   assert.ok(result.watchNext);
+  assert.ok(result.watchNext?.bandState);
+  assert.ok(result.watchNext?.signals?.length);
   assert.ok(result.dxOpportunity);
   assert.ok(result.nearbyActivity);
 });

@@ -408,6 +408,7 @@ function createOpportunityCard(
     bearing: pathEstimate ? pathEstimate.bearingDegrees : undefined,
     beamHeading: pathEstimate ? pathEstimate.bearingDegrees : stats.propagationBeamHeading ?? undefined,
     directionConfidence: stats.propagationDirectionConfidence,
+    strongestPropagationSignal: stats.propagationSignals[0],
     region: stats.roughRegionLabel ?? undefined,
     confidence: stats.confidence,
     confidenceReason: getConfidenceReason(stats, solar),

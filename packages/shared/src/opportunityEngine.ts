@@ -1,5 +1,6 @@
 import type { Band } from "./bands.js";
 import { predictAllBands } from "./bandPredictor.js";
+import { getAllBandPathDensities } from "./pathDensity.js";
 import {
   deriveContinentFromMaidenhead,
   estimatePathBetweenLocators,
@@ -12,6 +13,8 @@ import {
 import type {
   BandPrediction,
   BandPredictionMap,
+  PropagationBandDensity,
+  PropagationDensityMap,
   PskReporterSummary,
   SolarConditions,
   SpotTag,
@@ -60,6 +63,7 @@ export interface OpportunityEngineCard {
   readonly direction: string;
   readonly beamHeading: number;
   readonly confidence: "High" | "Medium" | "Low";
+  readonly directionConfidence?: "High" | "Medium" | "Low";
   readonly bandState?: "Opening" | "Stable" | "Fading";
   readonly trendLabel?: "Rising" | "Steady" | "Falling";
   readonly signals?: readonly string[];
@@ -105,6 +109,7 @@ interface CandidateEvidence {
   readonly why: readonly string[];
   readonly bandState: "Opening" | "Stable" | "Fading";
   readonly trendLabel: "Rising" | "Steady" | "Falling";
+  readonly directionConfidence: "High" | "Medium" | "Low";
   readonly offContinent: boolean;
   readonly portable: boolean;
   readonly nearbyDistanceKm?: number;
@@ -119,6 +124,7 @@ interface BandContext {
   readonly pskModeCounts: Readonly<Record<string, number>>;
   readonly pskDirectionCounts: Readonly<Record<(typeof directionOrder)[number], number>>;
   readonly bandPrediction: BandPrediction | null;
+  readonly pathDensity: PropagationBandDensity | null;
 }
 
 interface LoadedRedisState {
@@ -127,6 +133,7 @@ interface LoadedRedisState {
   readonly pskDirectionalCounts: ReadonlyMap<Band, Readonly<Record<(typeof directionOrder)[number], number>>>;
   readonly solar: SolarConditions | null;
   readonly bandPredictions: BandPredictionMap;
+  readonly pathDensities: PropagationDensityMap;
 }
 
 interface NormalizedUserProfile {
@@ -178,13 +185,22 @@ export async function generateOpportunities(
 
 async function loadRedisState(redisClient: OpportunityRedisClient): Promise<LoadedRedisState> {
   const now = Date.now();
-  const [rawSpots, rawPskSummary, rawPskFreshness, rawSolarCurrent, rawSolarLatest, bandPredictions] = await Promise.all([
+  const [
+    rawSpots,
+    rawPskSummary,
+    rawPskFreshness,
+    rawSolarCurrent,
+    rawSolarLatest,
+    bandPredictions,
+    pathDensities,
+  ] = await Promise.all([
     redisClient.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
     redisClient.get("psk:summary"),
     redisClient.get("psk:freshness"),
     redisClient.get("solar:current"),
     redisClient.get("solar:latest"),
     predictAllBands(redisClient),
+    getAllBandPathDensities(redisClient),
   ]);
 
   return {
@@ -193,6 +209,7 @@ async function loadRedisState(redisClient: OpportunityRedisClient): Promise<Load
     pskDirectionalCounts: await loadDirectionalCounts(redisClient),
     solar: parseSolar(rawSolarCurrent) ?? parseSolar(rawSolarLatest),
     bandPredictions,
+    pathDensities,
   };
 }
 
@@ -253,9 +270,10 @@ function buildBandCandidate(
     pskModeCounts: pskBand?.modeCounts ?? {},
     pskDirectionCounts: state.pskDirectionalCounts.get(band) ?? emptyDirectionCounts(),
     bandPrediction: state.bandPredictions[band] ?? null,
+    pathDensity: state.pathDensities[band] ?? null,
   };
   const direction = inferDirection(userProfile.homeGrid, representative, context);
-  const beamHeading = inferBeamHeading(userProfile.homeGrid, representative, direction);
+  const beamHeading = inferBeamHeading(userProfile.homeGrid, representative, direction, context);
   const mode = inferMode(representative, context, userProfile.modePreference);
   const offContinent = isOffContinent(representative, userProfile.homeContinent);
   const activityScore = scoreActivity(context);
@@ -297,6 +315,7 @@ function buildBandCandidate(
     why: buildWhy(context, representative, mode, offContinent, state.solar),
     bandState: toBandState(context.bandPrediction),
     trendLabel: toTrendLabel(context.bandPrediction, context),
+    directionConfidence: context.pathDensity?.confidence ?? "Low",
     offContinent,
     portable: isPortable(representative.tags),
   };
@@ -371,9 +390,10 @@ function selectNearbyActivity(
         pskModeCounts: {},
         pskDirectionCounts: emptyDirectionCounts(),
         bandPrediction: null,
+        pathDensity: null,
       };
       const direction = inferDirection(userProfile.homeGrid, spot, context);
-      const beamHeading = inferBeamHeading(userProfile.homeGrid, spot, direction);
+      const beamHeading = inferBeamHeading(userProfile.homeGrid, spot, direction, context);
       const mode = inferMode(spot, context, userProfile.modePreference);
       const activityScore = portable ? 82 : 56;
       const pathScore = distanceKm === null ? 35 : clamp(100 - (distanceKm / DISTANCE_NEARBY_KM) * 100, 0, 100);
@@ -432,6 +452,7 @@ function selectNearbyActivity(
           ],
         bandState: "Stable" as const,
         trendLabel: "Steady" as const,
+        directionConfidence: "Low" as const,
         offContinent: false,
         portable,
         nearbyDistanceKm: distanceKm ?? undefined,
@@ -451,6 +472,7 @@ function toCard(candidate: CandidateEvidence | null): OpportunityEngineCard | nu
     direction: directionLabel(candidate.direction),
     beamHeading: candidate.beamHeading,
     confidence: candidate.confidence,
+    directionConfidence: candidate.directionConfidence,
     bandState: candidate.bandState,
     trendLabel: candidate.trendLabel,
     signals: candidate.signals,
@@ -535,6 +557,7 @@ function scorePath(
   direction: (typeof directionOrder)[number],
 ): number {
   let score = 18 + Math.min(48, (context.pskDirectionCounts[direction] ?? 0) * 3);
+  score += scorePathDensityAlignment(context, direction);
 
   if (userProfile.homeGrid && representative.dxLocator) {
     const path = estimatePathBetweenLocators(userProfile.homeGrid, representative.dxLocator);
@@ -729,6 +752,12 @@ function buildSignals(
     }
   }
 
+  for (const signal of buildPathDensitySignals(context)) {
+    if (!signals.includes(signal)) {
+      signals.push(signal);
+    }
+  }
+
   if (context.pskCurrent > context.pskPrevious * 1.2 && context.pskCurrent > 0) {
     signals.push("PSK rising");
   } else if (context.pskCurrent > 0) {
@@ -765,6 +794,10 @@ function buildWhy(
 
   if (context.pskCurrent > 0) {
     why.push(`${context.pskCurrent} PSK reports confirm activity`);
+  }
+
+  if (context.pathDensity?.direction && context.pathDensity.confidence !== "Low") {
+    why.push(`${directionLabel(context.pathDensity.direction)} path density supports ${context.band}`);
   }
 
   if (context.bandPrediction?.state === "opening") {
@@ -830,6 +863,55 @@ function deriveConfidence(
   return "Low";
 }
 
+function scorePathDensityAlignment(
+  context: BandContext,
+  candidateDirection: (typeof directionOrder)[number],
+): number {
+  const density = context.pathDensity;
+
+  if (!density?.direction || Object.keys(density.densities).length === 0) {
+    return 0;
+  }
+
+  const dominantDirection = density.direction;
+  const dominantDensity = density.densities[dominantDirection] ?? 0;
+  const candidateDensity = density.densities[candidateDirection] ?? 0;
+
+  if (candidateDirection === dominantDirection) {
+    return density.confidence === "High" ? 22 : density.confidence === "Medium" ? 12 : 6;
+  }
+
+  if (density.sector?.includes(candidateDirection)) {
+    return density.confidence === "High" ? 14 : 8;
+  }
+
+  if (density.confidence === "High" && dominantDensity >= 0.3 && candidateDensity <= 0.08) {
+    return -10;
+  }
+
+  return 0;
+}
+
+function buildPathDensitySignals(context: BandContext): readonly string[] {
+  const density = context.pathDensity;
+
+  if (!density?.direction) {
+    return [];
+  }
+
+  const direction = directionLabel(density.direction);
+
+  if (density.confidence === "High") {
+    return [`${direction} propagation strongest`];
+  }
+
+  if (density.confidence === "Medium") {
+    return [`${direction} paths building`];
+  }
+
+  return [`${direction} propagation diffuse`];
+}
+
 function scoreWatchNextCandidate(
   candidate: CandidateEvidence,
   bestCandidate: CandidateEvidence | null,
@@ -856,6 +938,12 @@ function scoreWatchNextCandidate(
     score += 10;
   }
 
+  if (candidate.directionConfidence === "High") {
+    score += 14;
+  } else if (candidate.directionConfidence === "Medium") {
+    score += 6;
+  }
+
   const clusterGap = bestCandidate ? Math.max(0, bestCandidate.activityScore - candidate.activityScore) : 0;
   score -= Math.min(18, clusterGap * 0.12);
 
@@ -867,6 +955,10 @@ function inferDirection(
   representative: StoredOpportunitySpot,
   context: BandContext,
 ): (typeof directionOrder)[number] {
+  if (context.pathDensity?.dominantDirection && context.pathDensity.confidence === "High") {
+    return context.pathDensity.dominantDirection;
+  }
+
   const bestDirection = directionOrder.reduce<(typeof directionOrder)[number] | null>((best, direction) => {
     if (!best || context.pskDirectionCounts[direction] > context.pskDirectionCounts[best]) {
       return direction;
@@ -893,12 +985,17 @@ function inferBeamHeading(
   homeGrid: string,
   representative: StoredOpportunitySpot,
   direction: (typeof directionOrder)[number],
+  context?: BandContext,
 ): number {
   if (homeGrid && representative.dxLocator) {
     const path = estimatePathBetweenLocators(homeGrid, representative.dxLocator);
     if (path) {
       return Math.round(path.bearingDegrees);
     }
+  }
+
+  if (context?.pathDensity?.beamHeading) {
+    return context.pathDensity.beamHeading;
   }
 
   return directionCenterDegrees[direction];
