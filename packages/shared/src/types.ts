@@ -1,13 +1,22 @@
 import type { Band } from "./bands.js";
 
 export type SpotMode = "CW" | "SSB" | "FT8" | "FT4";
-export type SpotTag = "SOTA" | "POTA" | SpotMode;
+export type ParsedSpotMode = "cw" | "ssb" | "ft8" | "ft4" | "digital" | "unknown";
+export type ParsedSpotModeFamily = "cw" | "phone" | "digital" | "unknown";
+export type SpotTag = "SOTA" | "POTA" | "WWFF" | "/P" | SpotMode;
 
 export interface ParsedSpot {
+  readonly id: string;
+  readonly source: string;
   readonly spotterCallsign: string;
   readonly spottedCallsign: string;
+  readonly continentDx?: string;
   readonly frequencyKHz: number;
+  readonly frequencyHz?: number;
   readonly band: Band | null;
+  readonly observedAt?: string;
+  readonly mode?: ParsedSpotMode;
+  readonly modeFamily?: ParsedSpotModeFamily;
   readonly comment: string;
   readonly tags: readonly SpotTag[];
 }

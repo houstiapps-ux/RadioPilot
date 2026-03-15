@@ -28,15 +28,28 @@ export function parseDxClusterLine(line: string): ParsedSpot | null {
   }
 
   const comment = trailingText.trim();
+  const normalizedSpotter = spotterCallsign.toUpperCase();
+  const normalizedSpotted = spottedCallsign.toUpperCase();
 
   return {
-    spotterCallsign: spotterCallsign.toUpperCase(),
-    spottedCallsign: spottedCallsign.toUpperCase(),
+    id: buildTelnetSpotId(normalizedSpotter, normalizedSpotted, frequencyKHz, comment),
+    source: "telnet",
+    spotterCallsign: normalizedSpotter,
+    spottedCallsign: normalizedSpotted,
     frequencyKHz,
     band: lookupBand(frequencyKHz),
     comment,
     tags: detectTags(comment),
   };
+}
+
+function buildTelnetSpotId(
+  spotterCallsign: string,
+  spottedCallsign: string,
+  frequencyKHz: number,
+  comment: string,
+): string {
+  return [spotterCallsign, spottedCallsign, frequencyKHz.toFixed(1), comment].join("|");
 }
 
 function detectTags(comment: string): readonly SpotTag[] {
