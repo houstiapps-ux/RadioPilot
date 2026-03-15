@@ -97,6 +97,7 @@ export interface OpportunityDebugDxCandidate {
   readonly eventType?: string;
   readonly band: string;
   readonly scoreBreakdown: OpportunityScoreBreakdown;
+  readonly rejectionReasons: readonly string[];
   readonly activityScore: number;
   readonly rarityScore: number;
   readonly eventScore: number;
@@ -112,6 +113,7 @@ export interface OpportunityDebugCandidate {
   readonly cardType: "best" | "watch";
   readonly filterMatchLabels: readonly string[];
   readonly scoreBreakdown: OpportunityScoreBreakdown;
+  readonly rejectionReasons: readonly string[];
 }
 
 export interface OpportunityDebugSnapshot {
@@ -287,6 +289,14 @@ export function buildOpportunitySnapshotWithDebug(
     rankedCards[0] ?? null,
     watchNextBands[0]?.card ? withCardType(watchNextBands[0].card, "watch") : null,
   );
+  const selectedBestId = rankedCards[0]?.id ?? null;
+  const selectedWatchIds = new Set(
+    watchNextBands
+      .filter(({ card }) => card.id !== (selectedBestId ?? ""))
+      .slice(0, 3)
+      .map(({ card }) => card.id),
+  );
+  const selectedDxId = dxOpportunity?.id ?? null;
 
   const snapshot = {
     generatedAt: new Date(now).toISOString(),
@@ -324,12 +334,23 @@ export function buildOpportunitySnapshotWithDebug(
       pskBoostApplied: stats.pskBandBoostApplied || stats.pskModeBoostApplied,
       pskTrend: stats.pskTrendLabel,
     })),
-    candidates: rankedBands.map(({ card, filterMatchLabels, scoreBreakdown }, index) => ({
+    candidates: rankedBands.map(({ stats, card, filterMatchLabels, scoreBreakdown }, index) => ({
       callsign: card.callsign,
       band: card.band ?? "unknown",
       cardType: index === 0 ? "best" : "watch",
       filterMatchLabels,
       scoreBreakdown,
+      rejectionReasons: buildCandidateRejectionReasons(
+        stats,
+        card,
+        scoreBreakdown,
+        normalizedChasing,
+        normalizedModeFilter,
+        normalizedBandScope,
+        rankedBands[0]?.scoreBreakdown.totalScore ?? null,
+        selectedBestId,
+        selectedWatchIds,
+      ),
     })),
     dxCandidates: dxCandidates.map((candidate) => ({
       callsign: candidate.card.callsign,
@@ -337,6 +358,11 @@ export function buildOpportunitySnapshotWithDebug(
       eventType: candidate.eventType,
       band: candidate.card.band ?? "unknown",
       scoreBreakdown: candidate.scoreBreakdown,
+      rejectionReasons: buildDxCandidateRejectionReasons(
+        candidate,
+        rankedCards[0] ?? null,
+        selectedDxId,
+      ),
       activityScore: roundDebugScore(candidate.activityScore),
       rarityScore: roundDebugScore(candidate.rarityScore),
       eventScore: roundDebugScore(candidate.eventScore),
@@ -2206,6 +2232,96 @@ function buildDxScoreBreakdown(
     dxEventScore: roundDebugScore(eventScore),
     totalScore: roundDebugScore(scored.dxScore + userPreferenceScore),
   };
+}
+
+function buildCandidateRejectionReasons(
+  stats: BandStats,
+  card: OpportunityCard,
+  scoreBreakdown: OpportunityScoreBreakdown,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+  modeFilter: "ssb" | "cw" | "digital" | undefined,
+  bandScope: "hf" | "vhf-uhf" | undefined,
+  topScore: number | null,
+  selectedBestId: string | null,
+  selectedWatchIds: ReadonlySet<string>,
+): readonly string[] {
+  const reasons: string[] = [];
+
+  if (bandScope && !matchesBandScope(stats.bandKey, bandScope)) {
+    reasons.push("filteredByBandScope");
+  }
+
+  if (modeFilter && !matchesOpportunityFilters(stats, modeFilter, undefined)) {
+    reasons.push("filteredByMode");
+  }
+
+  if (chasing && !matchesChasingPreference(stats, card, chasing)) {
+    reasons.push("filteredByChasing");
+  }
+
+  if (card.directionConfidence === "Low") {
+    reasons.push("lowPathConfidence");
+  }
+
+  if (card.confidence === "Low") {
+    reasons.push("lowConfidence");
+  }
+
+  if (selectedBestId && card.id !== selectedBestId) {
+    reasons.push("notSelectedAsBestOpportunity");
+  }
+
+  if (!selectedWatchIds.has(card.id)) {
+    reasons.push("notSelectedForWatchNext");
+  }
+
+  if (topScore !== null && topScore > 0 && scoreBreakdown.totalScore < topScore * 0.5) {
+    reasons.push("lowScore");
+  }
+
+  return dedupeReasons(reasons);
+}
+
+function buildDxCandidateRejectionReasons(
+  candidate: DxCandidate,
+  bestOpportunity: OpportunityCard | null,
+  selectedDxId: string | null,
+): readonly string[] {
+  const reasons: string[] = [];
+
+  if (candidate.card.id !== selectedDxId) {
+    reasons.push("notSelectedForDxCard");
+  }
+
+  if (
+    bestOpportunity &&
+    isDuplicateOpportunity(candidate.card, bestOpportunity) &&
+    candidate.rarityScore < 0.7
+  ) {
+    reasons.push("duplicateOfBestOpportunity");
+  }
+
+  if (candidate.rarityScore < 0.7 && !candidate.eventType) {
+    reasons.push("insufficientRarityForDxCard");
+  }
+
+  if (candidate.card.directionConfidence === "Low") {
+    reasons.push("lowPathConfidence");
+  }
+
+  if (candidate.card.confidence === "Low") {
+    reasons.push("lowConfidence");
+  }
+
+  if (candidate.scoreBreakdown.totalScore < 0.5) {
+    reasons.push("lowScore");
+  }
+
+  return dedupeReasons(reasons);
+}
+
+function dedupeReasons(reasons: readonly string[]): readonly string[] {
+  return [...new Set(reasons)];
 }
 
 function getPropagationScoreBoost(stats: BandStats): number {
