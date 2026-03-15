@@ -539,7 +539,7 @@ function OperatorCard(props: {
         <StatPill label="Freq" value={formatFrequency(props.card.frequencyKHz)} />
         <StatPill label="Dir" value={view.directionLine} />
         <StatPill label="Beam" value={view.beamHeading} />
-        <ConfidenceMetaLine value={view.confidence} />
+        <ConfidenceMetaLine value={view.confidence} card={props.card} />
       </div>
 
       <p className="operator-reason">{view.reasonSummary}</p>
@@ -631,18 +631,31 @@ function StatPill(props: { label: string; value: string }) {
   );
 }
 
-function ConfidenceMetaLine(props: { value: string }) {
+function ConfidenceMetaLine(props: { value: string; card: OpportunityCard }) {
   const toneClassName =
     props.value === "High"
       ? "confidence-badge confidence-high"
       : props.value === "Medium"
         ? "confidence-badge confidence-medium"
         : "confidence-badge confidence-low";
+  const evidenceItems = getEvidenceItems(props.card);
 
   return (
-    <div className="confidence-line">
-      <span className="confidence-line-label">Confidence:</span>
-      <span className={toneClassName}>{props.value}</span>
+    <div className="confidence-meta">
+      <div className="confidence-line">
+        <span className="confidence-line-label">Confidence:</span>
+        <span className={toneClassName}>{props.value}</span>
+      </div>
+      {evidenceItems.length > 0 ? (
+        <div className="confidence-evidence">
+          <span className="confidence-evidence-label">Evidence:</span>
+          <div className="confidence-evidence-items">
+            {evidenceItems.map((item) => (
+              <span key={item} className="confidence-evidence-item">{item}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -950,6 +963,41 @@ function formatOperatorSummary(summary: string | undefined, fallback: string): s
     .replace(/\b(N|NE|E|SE|S|SW|W|NW) \((\d{1,3})°\)/g, "$1 · $2°")
     .replace(/\b(N|NE|E|SE|S|SW|W|NW) \((\d{1,3})Â°\)/g, "$1 · $2°")
     .replace(/\s*,\s*/g, " · ");
+}
+
+function getEvidenceItems(card: OpportunityCard): readonly string[] {
+  const signals = card.signals ?? [];
+  const why = card.why ?? [];
+  const confidenceReason = card.confidenceReason ?? "";
+  const items: string[] = [];
+
+  const clusterSupported = signals.some((signal) =>
+    signal === "Cluster strong" || signal === "Cluster active"
+  ) || why.some((item) => /\brecent spots\b/i.test(item));
+
+  const pskSupported =
+    signals.some((signal) => signal.startsWith("PSK ")) ||
+    why.some((item) => item.includes("PSK confirms")) ||
+    confidenceReason.includes("PSK");
+
+  const solarSupported =
+    signals.some((signal) => signal.includes("Solar supports")) ||
+    why.some((item) => item.includes("MUF supports")) ||
+    confidenceReason.includes("Solar");
+
+  if (clusterSupported) {
+    items.push("Cluster ✓");
+  }
+
+  if (pskSupported) {
+    items.push("PSK ✓");
+  }
+
+  if (solarSupported) {
+    items.push("Solar ✓");
+  }
+
+  return items;
 }
 
 function getIntelligenceChips(card: OpportunityCard, tone: PanelTone): readonly string[] {

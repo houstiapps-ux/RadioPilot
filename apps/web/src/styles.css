@@ -585,11 +585,16 @@ body {
   letter-spacing: 0.02em;
 }
 
+.confidence-meta {
+  display: grid;
+  gap: 4px;
+  min-height: 26px;
+}
+
 .confidence-line {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 26px;
   padding: 0 2px;
   white-space: nowrap;
 }
@@ -598,6 +603,35 @@ body {
   color: #17304b;
   font-size: 0.84rem;
   font-weight: 800;
+  line-height: 1;
+}
+
+.confidence-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 0 2px;
+}
+
+.confidence-evidence-label {
+  color: #67819c;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.confidence-evidence-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.confidence-evidence-item {
+  color: #35526f;
+  font-size: 0.72rem;
+  font-weight: 700;
   line-height: 1;
 }
 
