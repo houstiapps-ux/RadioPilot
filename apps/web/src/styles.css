@@ -405,25 +405,32 @@ body {
 }
 
 .operator-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.operator-band {
-  color: #55718c;
-  font-size: 0.78rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  display: block;
 }
 
 .operator-target-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 7px;
+}
+
+.operator-flag-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.operator-flag-image {
+  display: block;
+  width: 20px;
+  height: 15px;
+  border-radius: 2px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(165, 187, 209, 0.55);
 }
 
 .operator-flag {
@@ -432,6 +439,15 @@ body {
   justify-content: center;
   font-size: 1rem;
   line-height: 1;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.operator-flag-fallback {
+  position: absolute;
+  inset: 0;
+  font-size: 0.95rem;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .operator-target {
@@ -441,77 +457,68 @@ body {
 }
 
 .operator-subline {
-  margin-top: 4px;
+  margin-top: 5px;
   color: #5f7891;
   font-size: 0.84rem;
   font-weight: 600;
   line-height: 1.3;
 }
 
-.operator-frequency {
-  font-size: 0.96rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.operator-meta-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
-  margin-top: 12px;
-}
-
-.meta-line {
-  padding: 9px 10px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.52);
-}
-
-.meta-line-label {
-  display: block;
-  color: #67819c;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.meta-line-value {
-  display: block;
-  margin-top: 4px;
-  font-size: 0.95rem;
-  font-weight: 700;
-  line-height: 1.35;
-}
-
 .icon-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
 }
 
-.mode-strip {
-  align-items: center;
+.header-icon-strip {
+  margin-left: 2px;
 }
 
-.mode-chip,
-.tag-chip-icon {
+.header-icon {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.76);
-  color: #30475f;
-  font-size: 0.78rem;
-  font-weight: 700;
-  line-height: 1.1;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: #5a738c;
+  font-size: 0.82rem;
+  line-height: 1;
 }
 
-.mode-chip {
-  border: 1px solid rgba(165, 187, 209, 0.55);
+.operator-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.64);
+  color: #30475f;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.stat-pill-label {
+  color: #67819c;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.stat-pill-value {
+  color: #17304b;
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .inline-symbol {
@@ -556,8 +563,12 @@ body {
   border-color: #fda29b;
 }
 
+.tag-chip-icon {
+  gap: 6px;
+}
+
 .operator-reason {
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   font-size: 0.94rem;
   line-height: 1.45;
 }

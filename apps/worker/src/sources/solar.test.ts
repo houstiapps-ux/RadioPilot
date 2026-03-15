@@ -92,3 +92,26 @@ test("parses MUF numeric values from text with units", () => {
     updatedAt: "2026-03-15T10:05:00.000Z",
   });
 });
+
+test("derives MUF from fof2 and muffactor when direct MUF is absent", () => {
+  const parsed = parseSolarXml(
+    `
+      <solar>
+        <solarflux>130</solarflux>
+        <kindex>1</kindex>
+        <fof2>5.3</fof2>
+        <muffactor>3.47</muffactor>
+      </solar>
+    `,
+    "2026-03-15T10:05:00.000Z",
+  );
+
+  assert.deepEqual(parsed, {
+    sfi: 130,
+    kp: 1,
+    aIndex: undefined,
+    muf: 18.39,
+    sunspots: undefined,
+    updatedAt: "2026-03-15T10:05:00.000Z",
+  });
+});

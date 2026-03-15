@@ -420,7 +420,6 @@ function OperatorCard(props: {
   featured?: boolean;
 }) {
   const view = toOperatorView(props.card, props.tone);
-  const flag = countryCodeToFlagEmoji(props.card.countryCode);
   const modeItems = getModeIndicators(props.card);
   const tagItems = props.card.tags.map(getTagIndicator);
 
@@ -428,28 +427,33 @@ function OperatorCard(props: {
     <article className={`operator-card ${props.featured ? "operator-card-featured" : ""}`}>
       <div className="operator-row">
         <div>
-          <div className="operator-band">{view.band}</div>
           <div className="operator-target-row">
-            {flag ? (
-              <span
-                className="operator-flag"
-                title={view.country}
-                aria-label={view.country}
-              >
-                {flag}
-              </span>
-            ) : null}
+            <CountryFlag countryCode={props.card.countryCode} countryName={view.country} />
             <div className="operator-target">{view.primaryLine}</div>
+            {modeItems.length > 0 ? (
+              <div className="icon-strip header-icon-strip">
+                {modeItems.map((item) => (
+                  <span
+                    key={item.id}
+                    className="header-icon"
+                    title={item.label}
+                    aria-label={item.label}
+                  >
+                    {item.glyph}
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </div>
           <div className="operator-subline">{view.country}</div>
         </div>
-        <div className="operator-frequency">{formatFrequency(props.card.frequencyKHz)}</div>
       </div>
 
-      <div className="operator-meta-grid">
-        <MetaLine label="Direction" value={view.directionLine} />
-        <MetaLine label="Beam" value={view.beamHeading} />
-        <ModeMetaLine items={modeItems} />
+      <div className="operator-stats">
+        <StatPill label="Band" value={view.band} />
+        <StatPill label="Freq" value={formatFrequency(props.card.frequencyKHz)} />
+        <StatPill label="Dir" value={view.directionLine} />
+        <StatPill label="Beam" value={view.beamHeading} />
         <ConfidenceMetaLine value={view.confidence} />
       </div>
 
@@ -482,11 +486,36 @@ function OperatorCard(props: {
   );
 }
 
-function MetaLine(props: { label: string; value: string }) {
+function CountryFlag(props: { countryCode?: string; countryName: string }) {
+  const normalizedCountryCode = normalizeCountryCode(props.countryCode);
+
+  if (!normalizedCountryCode) {
+    return null;
+  }
+
+  const emojiFlag = countryCodeToFlagEmoji(normalizedCountryCode);
+  const imageUrl = `https://flagcdn.com/w20/${normalizedCountryCode.toLowerCase()}.png`;
+
   return (
-    <div className="meta-line">
-      <span className="meta-line-label">{props.label}</span>
-      <span className="meta-line-value">{props.value}</span>
+    <span className="operator-flag-wrap" title={props.countryName} aria-label={props.countryName}>
+      <img
+        className="operator-flag-image"
+        src={imageUrl}
+        alt=""
+        loading="lazy"
+        width="20"
+        height="15"
+      />
+      {emojiFlag ? <span className="operator-flag operator-flag-fallback" aria-hidden="true">{emojiFlag}</span> : null}
+    </span>
+  );
+}
+
+function StatPill(props: { label: string; value: string }) {
+  return (
+    <div className="stat-pill">
+      <span className="stat-pill-label">{props.label}</span>
+      <span className="stat-pill-value">{props.value}</span>
     </div>
   );
 }
@@ -503,31 +532,6 @@ function ConfidenceMetaLine(props: { value: string }) {
     <div className="meta-line">
       <span className="meta-line-label">Confidence</span>
       <span className={toneClassName}>{props.value}</span>
-    </div>
-  );
-}
-
-function ModeMetaLine(props: { items: readonly IconIndicator[] }) {
-  return (
-    <div className="meta-line">
-      <span className="meta-line-label">Modes</span>
-      {props.items.length > 0 ? (
-        <div className="icon-strip mode-strip">
-          {props.items.map((item) => (
-            <span
-              key={item.id}
-              className="mode-chip"
-              title={item.label}
-              aria-label={item.label}
-            >
-              <span className="inline-symbol" aria-hidden="true">{item.glyph}</span>
-              <span>{item.text}</span>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <span className="meta-line-value">Mixed modes</span>
-      )}
     </div>
   );
 }
@@ -549,7 +553,6 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   country: string;
   directionLine: string;
   beamHeading: string;
-  suggestedModes: string;
   confidence: string;
   reasonSummary: string;
   tagItems: readonly string[];
@@ -558,7 +561,6 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   const beamHeading = typeof card.bearing === "number" && Number.isFinite(card.bearing)
     ? `${Math.round(card.bearing)}°`
     : "Unavailable";
-  const suggestedModes = getSuggestedModes(card);
   const confidence = getConfidence(card.score);
   const callsign = safeText(
     card.callsign,
@@ -578,7 +580,6 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       country: formatCountry(card.countryCode),
       directionLine: card.direction ? directionLine : "Trend building",
       beamHeading,
-      suggestedModes,
       confidence,
       reasonSummary: safeText(card.summary, "Activity is rising."),
       tagItems: card.tags,
@@ -592,7 +593,6 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       country: formatCountry(card.countryCode),
       directionLine,
       beamHeading,
-      suggestedModes,
       confidence,
       reasonSummary: safeText(card.summary, "Distant DX is showing."),
       tagItems: card.tags,
@@ -606,7 +606,6 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       country: formatCountry(card.countryCode),
       directionLine: card.direction ? directionLine : "Nearby path unavailable",
       beamHeading,
-      suggestedModes,
       confidence,
       reasonSummary: safeText(card.summary, "Portable activity is active."),
       tagItems: card.tags,
@@ -619,35 +618,10 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
     country: formatCountry(card.countryCode),
     directionLine,
     beamHeading,
-    suggestedModes,
     confidence,
     reasonSummary: safeText(card.summary, "Best current opening."),
     tagItems: card.tags,
   };
-}
-
-function getSuggestedModes(card: OpportunityCard): string {
-  const modes = card.tags.filter((tag) => modeTags.has(tag));
-
-  if (modes.length > 0) {
-    return modes.join(" / ");
-  }
-
-  const summary = card.summary.toUpperCase();
-
-  if (summary.includes("DIGITAL")) {
-    return "Digital likely";
-  }
-
-  if (summary.includes("PHONE")) {
-    return "Voice likely";
-  }
-
-  if (summary.includes("CW")) {
-    return "CW likely";
-  }
-
-  return "Mixed modes";
 }
 
 function getModeIndicators(card: OpportunityCard): readonly IconIndicator[] {
@@ -855,20 +829,29 @@ function formatCountry(countryCode: string | undefined): string {
 }
 
 function countryCodeToFlagEmoji(countryCode: string | undefined): string | undefined {
+  const normalized = normalizeCountryCode(countryCode);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  const codePoints = [...normalized].map((letter) => {
+    const codePoint = letter.codePointAt(0);
+    return codePoint ? codePoint + 127397 : 0;
+  });
+
+  return codePoints.length === 2
+    ? String.fromCodePoint(...codePoints)
+    : undefined;
+}
+
+function normalizeCountryCode(countryCode: string | undefined): string | undefined {
   if (!countryCode) {
     return undefined;
   }
 
   const normalized = countryCode.trim().toUpperCase();
-
-  if (!/^[A-Z]{2}$/.test(normalized)) {
-    return undefined;
-  }
-
-  return String.fromCodePoint(
-    normalized.charCodeAt(0) + 127397,
-    normalized.charCodeAt(1) + 127397,
-  );
+  return /^[A-Z]{2}$/.test(normalized) ? normalized : undefined;
 }
 
 function formatSolarUpdatedAt(value: string | undefined): string {

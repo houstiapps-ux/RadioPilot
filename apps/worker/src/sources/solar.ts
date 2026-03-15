@@ -2,6 +2,7 @@ import type { SolarConditions } from "@radio-pilot/shared";
 
 const httpTimeoutMs = 15_000;
 const defaultSolarUrl = "https://www.hamqsl.com/solarxml.php";
+let hasLoggedSolarFieldTrace = false;
 
 export async function fetchSolarConditions(): Promise<SolarConditions | null> {
   const url = process.env.SOLAR_URL?.trim() || defaultSolarUrl;
@@ -27,9 +28,19 @@ export function parseSolarXml(xml: string, fetchedAt: string): SolarConditions |
     return null;
   }
 
-  const sfi = readNumericXmlValue(xml, ["solarflux", "solarfluxindex", "sfi"]);
+  const sfi = readNumericXmlValue(xml, ["solarflux", "solarfluxindex", "solarindex", "sfi"]);
   const kp = readNumericXmlValue(xml, ["kindex", "kp"]);
   const updatedAt = readUpdatedAt(xml) ?? fetchedAt;
+  const muf = readMufValue(xml);
+
+  logSolarFieldTraceOnce(xml, {
+    sfi,
+    kp,
+    aIndex: readNumericXmlValue(xml, ["aindex", "a-index", "a"]),
+    muf,
+    sunspots: readNumericXmlValue(xml, ["sunspots", "sunspotnumber", "spots"]),
+    updatedAt,
+  });
 
   if (sfi === undefined && kp === undefined) {
     return null;
@@ -39,7 +50,7 @@ export function parseSolarXml(xml: string, fetchedAt: string): SolarConditions |
     sfi,
     kp,
     aIndex: readNumericXmlValue(xml, ["aindex", "a-index", "a"]),
-    muf: readMufValue(xml),
+    muf,
     sunspots: readNumericXmlValue(xml, ["sunspots", "sunspotnumber", "spots"]),
     updatedAt,
   };
@@ -99,18 +110,25 @@ function readMufValue(xml: string): number | string | undefined {
     "mufvalue",
   ]);
 
-  if (!rawValue) {
-    return undefined;
+  if (rawValue) {
+    const numericValue = extractNumericPortion(rawValue);
+
+    if (numericValue !== undefined) {
+      return numericValue;
+    }
+
+    const normalized = rawValue.trim();
+    return normalized.length > 0 ? normalized : undefined;
   }
 
-  const numericValue = extractNumericPortion(rawValue);
+  const fof2 = readNumericXmlValue(xml, ["fof2"]);
+  const mufFactor = readNumericXmlValue(xml, ["muffactor", "muf-factor"]);
 
-  if (numericValue !== undefined) {
-    return numericValue;
+  if (typeof fof2 === "number" && typeof mufFactor === "number") {
+    return Math.round(fof2 * mufFactor * 100) / 100;
   }
 
-  const normalized = rawValue.trim();
-  return normalized.length > 0 ? normalized : undefined;
+  return undefined;
 }
 
 function extractNumericPortion(value: string): number | undefined {
@@ -122,4 +140,34 @@ function extractNumericPortion(value: string): number | undefined {
 
   const numericValue = Number.parseFloat(match[0]);
   return Number.isFinite(numericValue) ? numericValue : undefined;
+}
+
+function logSolarFieldTraceOnce(
+  xml: string,
+  parsed: SolarConditions,
+): void {
+  if (hasLoggedSolarFieldTrace) {
+    return;
+  }
+
+  hasLoggedSolarFieldTrace = true;
+
+  console.info("Solar field trace", {
+    parsed,
+    fields: {
+      solarflux: readXmlValue(xml, ["solarflux"]),
+      solarfluxindex: readXmlValue(xml, ["solarfluxindex"]),
+      solarindex: readXmlValue(xml, ["solarindex"]),
+      kindex: readXmlValue(xml, ["kindex"]),
+      kp: readXmlValue(xml, ["kp"]),
+      aindex: readXmlValue(xml, ["aindex"]),
+      muf: readXmlValue(xml, ["muf"]),
+      calculatedmuf: readXmlValue(xml, ["calculatedmuf"]),
+      fof2: readXmlValue(xml, ["fof2"]),
+      muffactor: readXmlValue(xml, ["muffactor"]),
+      sunspots: readXmlValue(xml, ["sunspots"]),
+      updated: readXmlValue(xml, ["updated"]),
+      timestamp: readXmlValue(xml, ["timestamp"]),
+    },
+  });
 }
