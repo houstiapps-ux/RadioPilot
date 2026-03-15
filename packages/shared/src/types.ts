@@ -40,10 +40,11 @@ export interface OpportunityCard {
 }
 
 export interface SolarConditions {
-  readonly sfi: string;
-  readonly kp: string;
-  readonly aIndex?: string;
-  readonly muf?: string;
+  readonly sfi?: number;
+  readonly kp?: number;
+  readonly aIndex?: number;
+  readonly muf?: number;
+  readonly sunspots?: number;
   readonly updatedAt: string;
 }
 

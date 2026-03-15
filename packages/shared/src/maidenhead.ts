@@ -170,8 +170,16 @@ export function estimatePathBetweenLocators(
   return {
     distanceKm,
     bearingDegrees,
-    direction: bearingToCompassPoint(bearingDegrees),
+    direction: bearingToDirectionBucket(bearingDegrees),
   };
+}
+
+export function bearingBetweenLocators(
+  fromLocator: string,
+  toLocator: string,
+): number | undefined {
+  const estimate = estimatePathBetweenLocators(fromLocator, toLocator);
+  return estimate?.bearingDegrees;
 }
 
 function haversineDistanceKm(
@@ -207,7 +215,7 @@ function initialBearingDegrees(
   return (bearing + 360) % 360;
 }
 
-function bearingToCompassPoint(
+export function bearingToDirectionBucket(
   bearingDegrees: number,
 ): MaidenheadPathEstimate["direction"] {
   const directions: readonly MaidenheadPathEstimate["direction"][] = [

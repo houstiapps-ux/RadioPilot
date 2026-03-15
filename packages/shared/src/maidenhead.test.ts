@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  bearingBetweenLocators,
+  bearingToDirectionBucket,
   deriveContinentFromLatLon,
   deriveContinentFromMaidenhead,
   estimatePathBetweenLocators,
@@ -50,4 +52,14 @@ test("estimates distance and direction between locators", () => {
   assert.ok(estimate.distanceKm > 4_500);
   assert.ok(estimate.distanceKm < 6_000);
   assert.equal(estimate.direction, "W");
+});
+
+test("computes bearing and direction buckets", () => {
+  const bearing = bearingBetweenLocators("IO63UI", "FN30AS");
+
+  assert.ok(typeof bearing === "number");
+  assert.ok(bearing >= 250);
+  assert.ok(bearing <= 310);
+  assert.equal(bearingToDirectionBucket(bearing), "W");
+  assert.equal(bearingToDirectionBucket(45), "NE");
 });

@@ -23,10 +23,11 @@ type OpportunityCard = {
 };
 
 type SolarData = {
-  sfi: string;
-  kp: string;
-  muf: string;
-  aIndex?: string;
+  sfi?: number;
+  kp?: number;
+  muf?: number;
+  aIndex?: number;
+  sunspots?: number;
   updatedAt?: string;
 };
 
@@ -273,6 +274,7 @@ function StatusPill(props: { state: LoadState }) {
 
 function SolarPanel(props: { data: SolarData | null }) {
   const updatedLabel = formatSolarUpdatedAt(props.data?.updatedAt);
+  const unavailable = !props.data;
 
   return (
     <>
@@ -281,113 +283,102 @@ function SolarPanel(props: { data: SolarData | null }) {
           <span className="strip-label">Solar</span>
           <div className="solar-title">Propagation Conditions</div>
         </div>
-        <div className="solar-status">
-          {props.data ? "Live solar data" : "Solar data unavailable"}
-        </div>
+        {props.data ? <div className="solar-status">Live solar data</div> : null}
       </div>
 
       <div className="solar-panel">
-        <GaugeMetric
+        <CompactSolarMetric
           label="SFI"
           value={props.data?.sfi}
           min={60}
           max={220}
           bands={[
-            { stop: 0.22, className: "gauge-band-poor" },
-            { stop: 0.46, className: "gauge-band-fair" },
-            { stop: 0.74, className: "gauge-band-good" },
-            { stop: 1, className: "gauge-band-strong" },
+            { stop: 0.22, className: "metric-band-poor" },
+            { stop: 0.46, className: "metric-band-fair" },
+            { stop: 0.74, className: "metric-band-good" },
+            { stop: 1, className: "metric-band-strong" },
           ]}
           rangeLabel="Poor to strong"
-          idleLabel="Solar data unavailable"
         />
 
-        <GaugeMetric
+        <CompactSolarMetric
           label="Kp"
           value={props.data?.kp}
           min={0}
           max={9}
           bands={[
-            { stop: 0.34, className: "gauge-band-quiet" },
-            { stop: 0.72, className: "gauge-band-disturbed" },
-            { stop: 1, className: "gauge-band-stormy" },
+            { stop: 0.34, className: "metric-band-quiet" },
+            { stop: 0.72, className: "metric-band-disturbed" },
+            { stop: 1, className: "metric-band-stormy" },
           ]}
           rangeLabel="Quiet to stormy"
-          idleLabel="Solar data unavailable"
         />
 
-        <SolarReading
+        <CompactSolarReading
           label="MUF"
-          value={props.data?.muf?.trim() ? props.data.muf : "—"}
-          hint={props.data ? "Estimated upper usable freq" : "Solar data unavailable"}
+          value={formatSolarValue(props.data?.muf)}
+          hint={props.data ? "Estimated upper usable freq" : ""}
         />
       </div>
 
       <div className="solar-secondary">
-        <span>A-index {props.data?.aIndex?.trim() ? props.data.aIndex : "—"}</span>
+        <span>A-index {formatSolarValue(props.data?.aIndex)}</span>
         <span>Updated {updatedLabel}</span>
+        {unavailable ? <span>Solar data unavailable</span> : null}
       </div>
     </>
   );
 }
 
-function GaugeMetric(props: {
+function CompactSolarMetric(props: {
   label: string;
-  value: string | undefined;
+  value: number | undefined;
   min: number;
   max: number;
   bands: readonly { stop: number; className: string }[];
   rangeLabel: string;
-  idleLabel: string;
 }) {
   const numericValue = parseSolarNumber(props.value);
   const hasValue = numericValue !== null;
   const ratio = hasValue
     ? clamp((numericValue - props.min) / (props.max - props.min), 0, 1)
     : 0;
-  const angle = -120 + ratio * 240;
+  const fillWidth = `${Math.max(0, Math.min(100, ratio * 100))}%`;
 
   return (
-    <div className={`solar-gauge ${hasValue ? "" : "solar-gauge-idle"}`}>
-      <div className="solar-gauge-head">
-        <span className="solar-gauge-label">{props.label}</span>
-        <span className="solar-gauge-scale">{props.rangeLabel}</span>
+    <div className={`solar-metric ${hasValue ? "" : "solar-metric-idle"}`}>
+      <div className="solar-metric-head">
+        <span className="solar-metric-label">{props.label}</span>
+        <span className="solar-metric-value">{hasValue ? formatSolarNumber(numericValue) : "—"}</span>
       </div>
-
-      <svg className="solar-gauge-svg" viewBox="0 0 160 112" aria-hidden="true">
-        {props.bands.map((band, index) => {
-          const startRatio = index === 0 ? 0 : props.bands[index - 1]?.stop ?? 0;
-          return (
-            <path
-              key={`${props.label}-${band.className}`}
-              className={`solar-gauge-arc ${band.className}`}
-              d={describeArcSegment(80, 86, 50, -120 + startRatio * 240, -120 + band.stop * 240)}
-            />
-          );
-        })}
-        <g
-          className="solar-gauge-pointer"
-          style={{ transform: `rotate(${angle}deg)` }}
-        >
-          <line x1="80" y1="86" x2="80" y2="36" />
-        </g>
-        <circle className="solar-gauge-cap" cx="80" cy="86" r="4.5" />
-      </svg>
-
-      <div className="solar-gauge-value">{hasValue ? formatSolarNumber(numericValue) : "—"}</div>
-      <div className="solar-gauge-status">
-        {hasValue ? props.rangeLabel : props.idleLabel}
+      <div className="solar-meter" aria-hidden="true">
+        <div className="solar-meter-bands">
+          {props.bands.map((band, index) => {
+            const previousStop = index === 0 ? 0 : props.bands[index - 1]?.stop ?? 0;
+            return (
+              <span
+                key={`${props.label}-${band.className}`}
+                className={`solar-meter-band ${band.className}`}
+                style={{ width: `${(band.stop - previousStop) * 100}%` }}
+              />
+            );
+          })}
+        </div>
+        <div className="solar-meter-fill" style={{ width: fillWidth }} />
       </div>
+      <div className="solar-metric-scale">{props.rangeLabel}</div>
     </div>
   );
 }
 
-function SolarReading(props: { label: string; value: string; hint: string }) {
+function CompactSolarReading(props: { label: string; value: string; hint: string }) {
   return (
-    <div className="solar-reading">
-      <span className="solar-reading-label">{props.label}</span>
-      <span className="solar-reading-value">{props.value}</span>
-      <span className="solar-reading-hint">{props.hint}</span>
+    <div className="solar-metric solar-reading-compact">
+      <div className="solar-metric-head">
+        <span className="solar-metric-label">{props.label}</span>
+        <span className="solar-metric-value">{props.value}</span>
+      </div>
+      <div className="solar-metric-scale">{props.hint}</div>
     </div>
   );
 }
@@ -488,8 +479,10 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   reasonSummary: string;
   tagItems: readonly string[];
 } {
-  const direction = extractDirection(card.summary);
-  const heading = direction ? `${direction.degrees}°` : "Unavailable";
+  const directionLine = safeText(card.direction, "Direction unavailable");
+  const beamHeading = typeof card.bearing === "number" && Number.isFinite(card.bearing)
+    ? `${Math.round(card.bearing)}°`
+    : "Unavailable";
   const suggestedModes = getSuggestedModes(card);
   const confidence = getConfidence(card.score);
   const callsign = safeText(
@@ -508,8 +501,8 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       band: safeText(card.band, "Unknown band"),
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
-      directionLine: direction ? direction.label : "Trend building",
-      beamHeading: heading,
+      directionLine: card.direction ? directionLine : "Trend building",
+      beamHeading,
       suggestedModes,
       confidence,
       reasonSummary: safeText(card.summary, "Activity is rising."),
@@ -522,8 +515,8 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       band: safeText(card.band, "Unknown band"),
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
-      directionLine: direction ? direction.label : "Direction unavailable",
-      beamHeading: heading,
+      directionLine,
+      beamHeading,
       suggestedModes,
       confidence,
       reasonSummary: safeText(card.summary, "Distant DX is showing."),
@@ -536,8 +529,8 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       band: safeText(card.band, "Unknown band"),
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
-      directionLine: direction ? direction.label : "Nearby path unavailable",
-      beamHeading: heading,
+      directionLine: card.direction ? directionLine : "Nearby path unavailable",
+      beamHeading,
       suggestedModes,
       confidence,
       reasonSummary: safeText(card.summary, "Portable activity is active."),
@@ -549,8 +542,8 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
     band: safeText(card.band, "Unknown band"),
     primaryLine: callsign,
     country: formatCountry(card.countryCode),
-    directionLine: direction ? direction.label : "Direction unavailable",
-    beamHeading: heading,
+    directionLine,
+    beamHeading,
     suggestedModes,
     confidence,
     reasonSummary: safeText(card.summary, "Best current opening."),
@@ -594,23 +587,16 @@ function getConfidence(score: number): string {
   return "Low";
 }
 
-function extractDirection(summary: string): { label: string; degrees: number } | null {
-  const match = summary.match(/\b(N|NE|E|SE|S|SW|W|NW)\b/i);
-
-  if (!match) {
-    return null;
-  }
-
-  const direction = match[1].toUpperCase() as keyof typeof directionMap;
-  return directionMap[direction];
-}
-
 function formatStationLine(settings: OperatorSettings): string {
   const grid = settings.homeGridValid ? settings.homeGrid.slice(0, 4) : "Not set";
   return `Location: ${grid} | HF/VHF`;
 }
 
-function parseSolarNumber(value: string | undefined): number | null {
+function parseSolarNumber(value: number | string | undefined): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
   if (!value || value === "—") {
     return null;
   }
@@ -623,34 +609,14 @@ function formatSolarNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+function formatSolarValue(value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? formatSolarNumber(value)
+    : "—";
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function polarToCartesian(
-  centerX: number,
-  centerY: number,
-  radius: number,
-  angleDegrees: number,
-): { x: number; y: number } {
-  const angleRadians = ((angleDegrees - 90) * Math.PI) / 180;
-  return {
-    x: centerX + radius * Math.cos(angleRadians),
-    y: centerY + radius * Math.sin(angleRadians),
-  };
-}
-
-function describeArcSegment(
-  centerX: number,
-  centerY: number,
-  radius: number,
-  startAngle: number,
-  endAngle: number,
-): string {
-  const start = polarToCartesian(centerX, centerY, radius, endAngle);
-  const end = polarToCartesian(centerX, centerY, radius, startAngle);
-  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
-  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
 }
 
 function formatFrequency(value: number): string {
@@ -723,14 +689,3 @@ function formatSolarUpdatedAt(value: string | undefined): string {
     minute: "2-digit",
   }).format(date);
 }
-
-const directionMap = {
-  N: { label: "North", degrees: 0 },
-  NE: { label: "North-East", degrees: 45 },
-  E: { label: "East", degrees: 90 },
-  SE: { label: "South-East", degrees: 135 },
-  S: { label: "South", degrees: 180 },
-  SW: { label: "South-West", degrees: 225 },
-  W: { label: "West", degrees: 270 },
-  NW: { label: "North-West", degrees: 315 },
-} as const;

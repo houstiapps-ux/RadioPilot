@@ -73,15 +73,14 @@ function parseSolar(value: string | null): SolarConditions | null {
     const parsed = JSON.parse(value) as Partial<SolarConditions>;
 
     if (
-      typeof parsed.sfi === "string" &&
-      typeof parsed.kp === "string" &&
       typeof parsed.updatedAt === "string"
     ) {
       return {
-        sfi: parsed.sfi,
-        kp: parsed.kp,
-        aIndex: typeof parsed.aIndex === "string" ? parsed.aIndex : undefined,
-        muf: typeof parsed.muf === "string" ? parsed.muf : undefined,
+        sfi: typeof parsed.sfi === "number" ? parsed.sfi : undefined,
+        kp: typeof parsed.kp === "number" ? parsed.kp : undefined,
+        aIndex: typeof parsed.aIndex === "number" ? parsed.aIndex : undefined,
+        muf: typeof parsed.muf === "number" ? parsed.muf : undefined,
+        sunspots: typeof parsed.sunspots === "number" ? parsed.sunspots : undefined,
         updatedAt: parsed.updatedAt,
       };
     }

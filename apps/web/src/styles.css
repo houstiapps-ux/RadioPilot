@@ -169,35 +169,31 @@ body {
 
 .solar-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-top: 6px;
 }
 
-.solar-gauge,
-.solar-reading {
+.solar-metric {
   min-width: 0;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.62);
   border: 1px solid rgba(181, 203, 223, 0.48);
+  padding: 7px 8px;
 }
 
-.solar-gauge {
-  padding: 7px 8px 7px;
-}
-
-.solar-gauge-idle {
+.solar-metric-idle {
   background: rgba(245, 249, 252, 0.72);
 }
 
-.solar-gauge-head {
+.solar-metric-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
-.solar-gauge-label {
+.solar-metric-label {
   color: #29425d;
   font-size: 0.72rem;
   font-weight: 800;
@@ -205,109 +201,78 @@ body {
   text-transform: uppercase;
 }
 
-.solar-gauge-scale {
-  color: #7895b2;
-  font-size: 0.64rem;
-  font-weight: 600;
+.solar-metric-value {
+  color: #17304b;
+  font-size: 0.88rem;
+  font-weight: 800;
   text-align: right;
 }
 
-.solar-gauge-svg {
-  display: block;
-  width: min(100%, 132px);
-  height: auto;
-  margin: 0 auto;
+.solar-meter {
+  position: relative;
+  margin-top: 6px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(193, 212, 229, 0.42);
 }
 
-.solar-gauge-arc {
-  fill: none;
-  stroke-width: 8;
-  stroke-linecap: round;
-}
-
-.gauge-band-poor {
-  stroke: #a26767;
-}
-
-.gauge-band-fair {
-  stroke: #d2a94c;
-}
-
-.gauge-band-good {
-  stroke: #8ebf55;
-}
-
-.gauge-band-strong {
-  stroke: #5fd092;
-}
-
-.gauge-band-quiet {
-  stroke: #59c980;
-}
-
-.gauge-band-disturbed {
-  stroke: #d8ab4d;
-}
-
-.gauge-band-stormy {
-  stroke: #e06c5a;
-}
-
-.solar-gauge-pointer {
-  transform-origin: 80px 86px;
-}
-
-.solar-gauge-pointer line {
-  stroke: #17304b;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-}
-
-.solar-gauge-cap {
-  fill: #17304b;
-}
-
-.solar-gauge-value {
-  margin-top: -4px;
-  font-size: 0.88rem;
-  font-weight: 800;
-  color: #17304b;
-}
-
-.solar-gauge-status {
-  margin-top: 1px;
-  color: #6a88a4;
-  font-size: 0.67rem;
-  line-height: 1.35;
-}
-
-.solar-reading {
+.solar-meter-bands {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 8px;
+  width: 100%;
+  height: 100%;
 }
 
-.solar-reading-label {
-  color: #6a87a2;
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.solar-meter-band {
+  height: 100%;
 }
 
-.solar-reading-value {
-  margin-top: 3px;
-  font-size: 0.88rem;
-  font-weight: 800;
-  color: #17304b;
+.metric-band-poor {
+  background: #a26767;
 }
 
-.solar-reading-hint {
-  margin-top: 2px;
+.metric-band-fair {
+  background: #d2a94c;
+}
+
+.metric-band-good {
+  background: #8ebf55;
+}
+
+.metric-band-strong {
+  background: #5fd092;
+}
+
+.metric-band-quiet {
+  background: #59c980;
+}
+
+.metric-band-disturbed {
+  background: #d8ab4d;
+}
+
+.metric-band-stormy {
+  background: #e06c5a;
+}
+
+.solar-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  background: rgba(23, 48, 75, 0.16);
+  border-right: 2px solid #17304b;
+  border-radius: 999px;
+}
+
+.solar-metric-scale {
+  margin-top: 5px;
   color: #6f8aa4;
   font-size: 0.67rem;
-  line-height: 1.35;
+  line-height: 1.25;
+}
+
+.solar-reading-compact .solar-metric-scale {
+  margin-top: 2px;
 }
 
 .solar-secondary {
@@ -556,5 +521,11 @@ body {
   .panel-grid {
     grid-template-columns: 1.1fr 0.9fr;
     align-items: start;
+  }
+}
+
+@media (max-width: 759px) {
+  .solar-panel {
+    grid-template-columns: 1fr;
   }
 }

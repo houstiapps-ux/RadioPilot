@@ -23,19 +23,25 @@ export async function fetchSolarConditions(): Promise<SolarConditions | null> {
 }
 
 export function parseSolarXml(xml: string, fetchedAt: string): SolarConditions | null {
-  const sfi = readXmlValue(xml, ["solarflux", "solarfluxindex", "sfi"]);
-  const kp = readXmlValue(xml, ["kindex", "kp"]);
+  if (typeof xml !== "string" || xml.trim().length === 0) {
+    return null;
+  }
 
-  if (!sfi || !kp) {
+  const sfi = readNumericXmlValue(xml, ["solarflux", "solarfluxindex", "sfi"]);
+  const kp = readNumericXmlValue(xml, ["kindex", "kp"]);
+  const updatedAt = readUpdatedAt(xml) ?? fetchedAt;
+
+  if (sfi === undefined && kp === undefined) {
     return null;
   }
 
   return {
     sfi,
     kp,
-    aIndex: readXmlValue(xml, ["aindex", "a-index", "a"]),
-    muf: readXmlValue(xml, ["muf", "calculatedmuf"]),
-    updatedAt: readUpdatedAt(xml) ?? fetchedAt,
+    aIndex: readNumericXmlValue(xml, ["aindex", "a-index", "a"]),
+    muf: readNumericXmlValue(xml, ["muf", "calculatedmuf"]),
+    sunspots: readNumericXmlValue(xml, ["sunspots", "sunspotnumber", "spots"]),
+    updatedAt,
   };
 }
 
@@ -52,7 +58,7 @@ function readUpdatedAt(xml: string): string | undefined {
 
 function readXmlValue(xml: string, tagNames: readonly string[]): string | undefined {
   for (const tagName of tagNames) {
-    const pattern = new RegExp(`<${tagName}>([^<]+)</${tagName}>`, "i");
+    const pattern = new RegExp(`<${tagName}(?:\\s[^>]*)?>([\\s\\S]*?)</${tagName}>`, "i");
     const match = xml.match(pattern);
     const value = match?.[1]?.trim();
 
@@ -62,4 +68,16 @@ function readXmlValue(xml: string, tagNames: readonly string[]): string | undefi
   }
 
   return undefined;
+}
+
+function readNumericXmlValue(xml: string, tagNames: readonly string[]): number | undefined {
+  const rawValue = readXmlValue(xml, tagNames);
+
+  if (!rawValue) {
+    return undefined;
+  }
+
+  const normalized = rawValue.replace(",", ".").trim();
+  const numericValue = Number.parseFloat(normalized);
+  return Number.isFinite(numericValue) ? numericValue : undefined;
 }

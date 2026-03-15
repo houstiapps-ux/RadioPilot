@@ -450,7 +450,10 @@ async function persistDxHeatSpot(parsedSpot: ParsedSpot): Promise<boolean> {
 }
 
 async function persistSolarConditions(solar: SolarConditions): Promise<void> {
-  await redis.set("solar:latest", JSON.stringify(solar));
+  await Promise.all([
+    redis.set("solar:latest", JSON.stringify(solar)),
+    redis.set("solar:freshness", String(Date.now())),
+  ]);
 }
 
 async function persistActivation(activation: ActivationRecord): Promise<void> {
