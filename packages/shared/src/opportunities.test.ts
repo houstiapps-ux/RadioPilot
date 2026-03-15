@@ -65,6 +65,41 @@ test("preserves countryCode from stored spots into generated opportunity cards",
   assert.equal(snapshot.dxOpportunity?.countryCode, "ES");
 });
 
+test("uses the representative spot locator for card direction and bearing", () => {
+  const observedAt = "2026-03-15T11:58:00.000Z";
+  const [storedSpot] = parseStoredOpportunitySpot(JSON.stringify({
+    id: "spot-direction-1",
+    source: "dxheat",
+    spotterCallsign: "EI2TEST",
+    spottedCallsign: "K1ABC",
+    continentDx: "NA",
+    dxLocator: "FN31PR",
+    frequencyKHz: 14250,
+    band: "20m",
+    observedAt,
+    mode: "ssb",
+    modeFamily: "phone",
+    comment: "CQ",
+    tags: [],
+    receivedAt: observedAt,
+  }));
+
+  assert.ok(storedSpot);
+
+  const snapshot = buildOpportunitySnapshot([storedSpot], {
+    now: Date.parse("2026-03-15T12:00:00.000Z"),
+    homeGrid: "IO63UI",
+  });
+
+  assert.ok(snapshot.bestOpportunity);
+  assert.equal(snapshot.bestOpportunity.direction, "West");
+  assert.ok(typeof snapshot.bestOpportunity.bearing === "number");
+  assert.ok(snapshot.bestOpportunity.bearing >= 250);
+  assert.ok(snapshot.bestOpportunity.bearing <= 310);
+  assert.equal(snapshot.watchNext.length, 0);
+  assert.equal(snapshot.dxOpportunity?.direction, "West");
+});
+
 function createSpot(
   callsign: string,
   dxLocator: string,

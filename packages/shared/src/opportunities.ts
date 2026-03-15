@@ -74,7 +74,7 @@ export function buildOpportunitySnapshot(
     normalizedHomeGrid,
   );
   const rankedBands = statsByBand
-    .map((stats) => ({ stats, card: createOpportunityCard(stats) }))
+    .map((stats) => ({ stats, card: createOpportunityCard(stats, stats.representative, normalizedHomeGrid) }))
     .sort((left, right) =>
       compareCards(left.card, right.card, left.stats, right.stats, normalizedOperatingStyle),
     );
@@ -82,7 +82,7 @@ export function buildOpportunitySnapshot(
   const portableCards = rankedBands
     .flatMap(({ stats }) => {
       const representative = selectPortableRepresentativeSpot(stats.spots);
-      return representative ? [createOpportunityCard(stats, representative)] : [];
+      return representative ? [createOpportunityCard(stats, representative, normalizedHomeGrid)] : [];
     });
   const watchNextBands = [...rankedBands].sort((left, right) =>
     compareWatchNextBandStats(
@@ -106,6 +106,7 @@ export function buildOpportunitySnapshot(
     ? createDxOpportunityCard(
       dxRankedBands.map(({ stats }) => stats),
       normalizedHomeContinent ?? null,
+      normalizedHomeGrid,
     )
     : watchNextBands[0]?.card ?? null;
 
@@ -244,8 +245,10 @@ function buildBandStats(
 function createOpportunityCard(
   stats: BandStats,
   representative: StoredOpportunitySpot = stats.representative,
+  homeGrid?: string,
 ): OpportunityCard {
   const score = scoreBand(stats);
+  const pathEstimate = getRepresentativePathEstimate(representative, homeGrid);
 
   return {
     id: `${stats.bandKey}:${representative.spottedCallsign}`,
@@ -254,8 +257,8 @@ function createOpportunityCard(
     frequencyKHz: representative.frequencyKHz,
     summary: buildCardSummary(stats),
     countryCode: representative.countryCode,
-    direction: stats.dominantDirection ?? undefined,
-    bearing: stats.dominantBearingDegrees ?? undefined,
+    direction: pathEstimate ? getDirectionLabel(pathEstimate.direction) : undefined,
+    bearing: pathEstimate ? pathEstimate.bearingDegrees : undefined,
     region: stats.roughRegionLabel ?? undefined,
     confidence: stats.confidence,
     tags: representative.tags,
@@ -512,6 +515,23 @@ function collectPathEstimates(
   });
 }
 
+function getRepresentativePathEstimate(
+  representative: StoredOpportunitySpot,
+  homeGrid: string | undefined,
+): PathEstimate | undefined {
+  if (!homeGrid) {
+    return undefined;
+  }
+
+  const dxLocator = normalizeHomeGrid(representative.dxLocator);
+
+  if (!dxLocator) {
+    return undefined;
+  }
+
+  return estimatePathBetweenLocators(homeGrid, dxLocator);
+}
+
 function hasAnyContinentData(stats: readonly BandStats[]): boolean {
   return stats.some((statsItem) => statsItem.offContinentSpots !== null);
 }
@@ -519,16 +539,17 @@ function hasAnyContinentData(stats: readonly BandStats[]): boolean {
 function createDxOpportunityCard(
   statsByBand: readonly BandStats[],
   homeContinent: string | null,
+  homeGrid?: string,
 ): OpportunityCard | null {
   for (const stats of statsByBand) {
     const representative = selectOffContinentRepresentativeSpot(stats.spots, homeContinent);
 
     if (representative) {
-      return createOpportunityCard(stats, representative);
+      return createOpportunityCard(stats, representative, homeGrid);
     }
   }
 
-  return statsByBand[0] ? createOpportunityCard(statsByBand[0]) : null;
+  return statsByBand[0] ? createOpportunityCard(statsByBand[0], statsByBand[0].representative, homeGrid) : null;
 }
 
 function compareDxBandStats(
