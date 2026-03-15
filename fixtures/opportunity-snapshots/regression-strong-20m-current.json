@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "capturedAt": "2026-03-15T12:00:00.000Z",
+  "userProfile": {
+    "homeGrid": "IO63UI"
+  },
+  "filters": {},
+  "input": {
+    "solar": {
+      "sfi": 112,
+      "kp": 2,
+      "aIndex": 10,
+      "muf": 18,
+      "updatedAt": "2026-03-15T11:55:00.000Z"
+    },
+    "psk": {
+      "summary": {
+        "generatedAt": "2026-03-15T12:00:00.000Z",
+        "freshnessTimestamp": "2026-03-15T11:59:30.000Z",
+        "currentWindowStart": "2026-03-15T11:45:00.000Z",
+        "previousWindowStart": "2026-03-15T11:30:00.000Z",
+        "windowMinutes": 15,
+        "bands": [
+          {
+            "band": "20m",
+            "currentWindowCount": 80,
+            "previousWindowCount": 20,
+            "trend": 60,
+            "modeCounts": {
+              "FT8": 50,
+              "FT4": 10
+            },
+            "directionCounts": {
+              "W": 6
+            },
+            "pathCounts": {},
+            "uniqueSenderLocatorCount": 12,
+            "uniqueReceiverLocatorCount": 10
+          }
+        ]
+      },
+      "trends": {
+        "20m": {
+          "trend": "rising",
+          "volumeDelta": 0.6,
+          "uniqueCallDelta": 0.5,
+          "gridDelta": 0.4,
+          "confidence": "High"
+        }
+      },
+      "bandPredictions": {
+        "20m": {
+          "state": "stable",
+          "score": 0.58,
+          "volumeDelta": 0.2,
+          "uniqueCallDelta": 0.2,
+          "gridDelta": 0.2,
+          "directionStrength": 0.4,
+          "solarSupport": 0.5,
+          "signals": [
+            "20m holding steady"
+          ]
+        }
+      },
+      "propagationDensity": {
+        "20m": {
+          "dominantDirection": "W",
+          "direction": "W",
+          "heading": 270,
+          "beamHeading": 270,
+          "sector": "W-NW",
+          "confidence": "High",
+          "densities": {
+            "W": 0.42,
+            "NW": 0.18,
+            "SW": 0.12
+          }
+        }
+      }
+    },
+    "dx": {
+      "events": []
+    },
+    "spots": [
+      {
+        "id": "K1AAA|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "K1AAA",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN31PR",
+        "frequencyKHz": 14250,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:59:00.000Z",
+        "mode": "ssb",
+        "modeFamily": "phone",
+        "comment": "CQ",
+        "tags": [
+          "SSB"
+        ],
+        "receivedAt": "2026-03-15T11:59:00.000Z"
+      },
+      {
+        "id": "W1BBB|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "W1BBB",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN20AB",
+        "frequencyKHz": 14074,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:58:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:58:00.000Z"
+      },
+      {
+        "id": "EA8ABC|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "EA8ABC",
+        "continentDx": "AF",
+        "countryCode": "ES",
+        "dxLocator": "IL18",
+        "frequencyKHz": 14074,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:57:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ DX",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:57:00.000Z"
+      },
+      {
+        "id": "K2CCC|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "K2CCC",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN30AA",
+        "frequencyKHz": 14195,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:56:00.000Z",
+        "mode": "ssb",
+        "modeFamily": "phone",
+        "comment": "CQ",
+        "tags": [
+          "SSB"
+        ],
+        "receivedAt": "2026-03-15T11:56:00.000Z"
+      }
+    ]
+  }
+}

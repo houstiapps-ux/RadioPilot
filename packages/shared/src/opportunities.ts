@@ -11,6 +11,7 @@ import {
   parseMaidenheadLocator,
 } from "./maidenhead.js";
 import { calculatePathStability } from "./pathStability.js";
+import { DX_EVENT_SCORING, OPPORTUNITY_SCORING } from "./scoringConfig.js";
 import type {
   BandPredictionMap,
   OpportunityCard,
@@ -652,7 +653,11 @@ function createOpportunityCard(
 }
 
 function scoreBand(stats: BandStats): number {
-  return stats.totalSpots * 100 + stats.uniqueCallsigns * 10 + stats.portableSpots * 25;
+  return (
+    stats.totalSpots * OPPORTUNITY_SCORING.bandBase.totalSpotWeight +
+    stats.uniqueCallsigns * OPPORTUNITY_SCORING.bandBase.uniqueCallWeight +
+    stats.portableSpots * OPPORTUNITY_SCORING.bandBase.portableSpotWeight
+  );
 }
 
 function selectRepresentativeSpot(spots: readonly StoredOpportunitySpot[]): StoredOpportunitySpot {
@@ -2009,13 +2014,17 @@ function isMeaningfulWatchOpportunity(
   const supportPresent =
     stats.pskCurrent > 0 ||
     stats.totalSpots >= 3 ||
-    stats.predictedBandScore >= 0.65;
+    stats.predictedBandScore >= OPPORTUNITY_SCORING.watchThresholds.minSupportPredictedScore;
 
   if (!openingSignal || !supportPresent) {
     return false;
   }
 
-  if (card.confidence === "Low" && stats.pskCurrent === 0 && stats.predictedBandScore < 0.75) {
+  if (
+    card.confidence === "Low" &&
+    stats.pskCurrent === 0 &&
+    stats.predictedBandScore < OPPORTUNITY_SCORING.watchThresholds.minPredictedScoreWithNoPsk
+  ) {
     return false;
   }
 
@@ -2023,7 +2032,10 @@ function isMeaningfulWatchOpportunity(
 }
 
 function isMeaningfulDxCandidate(candidate: DxCandidate): boolean {
-  if (candidate.eventType || candidate.rarityScore >= 0.7) {
+  if (
+    candidate.eventType ||
+    candidate.rarityScore >= OPPORTUNITY_SCORING.dxMeaningfulThresholds.rarityStrong
+  ) {
     return true;
   }
 
@@ -2035,15 +2047,24 @@ function isMeaningfulDxCandidate(candidate: DxCandidate): boolean {
     return true;
   }
 
-  if (candidate.card.confidence === "Low" && candidate.pathScore < 0.2) {
+  if (
+    candidate.card.confidence === "Low" &&
+    candidate.pathScore < OPPORTUNITY_SCORING.dxMeaningfulThresholds.minLowConfidencePath
+  ) {
     return false;
   }
 
-  if (candidate.activityScore >= 0.25 && candidate.pathScore >= 0.8) {
+  if (
+    candidate.activityScore >= OPPORTUNITY_SCORING.dxMeaningfulThresholds.fallbackActivity &&
+    candidate.pathScore >= OPPORTUNITY_SCORING.dxMeaningfulThresholds.fallbackHighPath
+  ) {
     return true;
   }
 
-  return candidate.activityScore >= 0.45 && candidate.pathScore >= 0.2;
+  return (
+    candidate.activityScore >= OPPORTUNITY_SCORING.dxMeaningfulThresholds.standardActivity &&
+    candidate.pathScore >= OPPORTUNITY_SCORING.dxMeaningfulThresholds.standardPath
+  );
 }
 
 function isMeaningfulNearbyOpportunity(card: OpportunityCard): boolean {
@@ -2331,22 +2352,22 @@ function getOpportunityTotalScore(
   let score = card.score;
 
   if (stats.offContinentSpots !== null) {
-    score += stats.offContinentSpots * 40;
+    score += stats.offContinentSpots * OPPORTUNITY_SCORING.aggregate.offContinentSpotWeight;
   }
 
-  score += stats.dominantDirectionUniqueCallsigns * 20;
-  score += Math.max(stats.directionSpread, 0) * 15;
+  score += stats.dominantDirectionUniqueCallsigns * OPPORTUNITY_SCORING.aggregate.directionalUniqueCallWeight;
+  score += Math.max(stats.directionSpread, 0) * OPPORTUNITY_SCORING.aggregate.directionSpreadWeight;
   score += getPropagationScoreBoost(stats);
-  score += countActiveModeFamilies(stats.modeFamilyCounts) * 12;
+  score += countActiveModeFamilies(stats.modeFamilyCounts) * OPPORTUNITY_SCORING.aggregate.activeModeFamilyWeight;
   score += getPskScoreBoost(stats);
 
   if (operatingStyle === "dx") {
     if (stats.offContinentSpots !== null) {
-      score += stats.offContinentSpots * 60;
+      score += stats.offContinentSpots * OPPORTUNITY_SCORING.operatingStyleDx.offContinentSpotWeight;
     }
 
     if (stats.maxDistanceKm !== null) {
-      score += Math.round(stats.maxDistanceKm / 250);
+      score += Math.round(stats.maxDistanceKm / OPPORTUNITY_SCORING.operatingStyleDx.distanceKmDivisor);
     }
   }
 
@@ -2414,7 +2435,11 @@ function buildCandidateRejectionReasons(
     reasons.push("notSelectedForWatchNext");
   }
 
-  if (topScore !== null && topScore > 0 && scoreBreakdown.totalScore < topScore * 0.5) {
+  if (
+    topScore !== null &&
+    topScore > 0 &&
+    scoreBreakdown.totalScore < topScore * OPPORTUNITY_SCORING.rejectionThresholds.lowScoreRatio
+  ) {
     reasons.push("lowScore");
   }
 
@@ -2435,12 +2460,15 @@ function buildDxCandidateRejectionReasons(
   if (
     bestOpportunity &&
     isDuplicateOpportunity(candidate.card, bestOpportunity) &&
-    candidate.rarityScore < 0.7
+    candidate.rarityScore < OPPORTUNITY_SCORING.dxMeaningfulThresholds.rarityStrong
   ) {
     reasons.push("duplicateOfBestOpportunity");
   }
 
-  if (candidate.rarityScore < 0.7 && !candidate.eventType) {
+  if (
+    candidate.rarityScore < OPPORTUNITY_SCORING.dxMeaningfulThresholds.rarityStrong &&
+    !candidate.eventType
+  ) {
     reasons.push("insufficientRarityForDxCard");
   }
 
@@ -2452,7 +2480,7 @@ function buildDxCandidateRejectionReasons(
     reasons.push("lowConfidence");
   }
 
-  if (candidate.scoreBreakdown.totalScore < 0.5) {
+  if (candidate.scoreBreakdown.totalScore < OPPORTUNITY_SCORING.rejectionThresholds.dxLowScore) {
     reasons.push("lowScore");
   }
 
@@ -2467,13 +2495,13 @@ function getPropagationScoreBoost(stats: BandStats): number {
   let score = 0;
 
   if (stats.propagationDirectionConfidence === "High") {
-    score += 24;
+    score += OPPORTUNITY_SCORING.propagationBoost.highConfidence;
   } else if (stats.propagationDirectionConfidence === "Medium") {
-    score += 12;
+    score += OPPORTUNITY_SCORING.propagationBoost.mediumConfidence;
   }
 
   if (stats.propagationSector) {
-    score += 10;
+    score += OPPORTUNITY_SCORING.propagationBoost.sectorBonus;
   }
 
   return score;
@@ -2483,21 +2511,21 @@ function getPskScoreBoost(stats: BandStats): number {
   let score = 0;
 
   if (stats.pskBandBoostApplied) {
-    score += 18;
+    score += OPPORTUNITY_SCORING.pskBoost.activeBandBonus;
   }
 
   if (stats.pskTrendRising) {
-    score += 12;
+    score += OPPORTUNITY_SCORING.pskBoost.risingWindowBonus;
   }
 
   if (stats.pskTrendLabel === "rising") {
-    score += 10;
+    score += OPPORTUNITY_SCORING.pskBoost.risingTrendBonus;
   } else if (stats.pskTrendLabel === "falling") {
-    score -= 14;
+    score += OPPORTUNITY_SCORING.pskBoost.fallingTrendPenalty;
   }
 
   if (stats.pskModeBoostApplied) {
-    score += 8;
+    score += OPPORTUNITY_SCORING.pskBoost.modeAgreementBonus;
   }
 
   return score;
@@ -2513,23 +2541,29 @@ function getIntentScoreBoost(
   }
 
   if (chasing === "dx") {
-    return (stats.offContinentSpots ?? 0) * 30 + Math.round((stats.maxDistanceKm ?? 0) / 350);
+    return (
+      (stats.offContinentSpots ?? 0) * OPPORTUNITY_SCORING.intentBoost.dxOffContinentSpotWeight +
+      Math.round((stats.maxDistanceKm ?? 0) / OPPORTUNITY_SCORING.intentBoost.dxDistanceKmDivisor)
+    );
   }
 
   if (chasing === "pota") {
-    return countTaggedSpots(stats.spots, "POTA") * 160 - countPortableTaggedSpots(stats.spots) * 10;
+    return (
+      countTaggedSpots(stats.spots, "POTA") * OPPORTUNITY_SCORING.intentBoost.potaTagWeight -
+      countPortableTaggedSpots(stats.spots) * OPPORTUNITY_SCORING.intentBoost.potaPortablePenalty
+    );
   }
 
   if (chasing === "sota") {
-    return countTaggedSpots(stats.spots, "SOTA") * 180;
+    return countTaggedSpots(stats.spots, "SOTA") * OPPORTUNITY_SCORING.intentBoost.sotaTagWeight;
   }
 
   if (chasing === "portable") {
-    return stats.portableSpots * 90;
+    return stats.portableSpots * OPPORTUNITY_SCORING.intentBoost.portableSpotWeight;
   }
 
   if (chasing === "digital") {
-    return stats.modeFamilyCounts.digital * 45;
+    return stats.modeFamilyCounts.digital * OPPORTUNITY_SCORING.intentBoost.digitalSpotWeight;
   }
 
   return 0;
@@ -2544,15 +2578,15 @@ function getIntentDxBoost(
   }
 
   if (chasing === "dx") {
-    return 0.24;
+    return OPPORTUNITY_SCORING.dxIntentBoost.chasingDx;
   }
 
   if (chasing === "digital" && card.tags.some((tag) => tag === "FT8" || tag === "FT4")) {
-    return 0.12;
+    return OPPORTUNITY_SCORING.dxIntentBoost.chasingDigital;
   }
 
   if ((chasing === "pota" || chasing === "sota" || chasing === "portable") && card.portable) {
-    return -0.12;
+    return OPPORTUNITY_SCORING.dxIntentBoost.portablePenalty;
   }
 
   return 0;
@@ -2729,15 +2763,15 @@ function getDxEventStrength(dxEvent: DxEventCandidate | undefined): number {
 
   switch (dxEvent.eventType) {
     case "Possible DXpedition":
-      return 0.88;
+      return DX_EVENT_SCORING.eventTypeStrength.possibleDxpedition;
     case "Rare DX active":
-      return 0.82;
+      return DX_EVENT_SCORING.eventTypeStrength.rareDxActive;
     case "Multi-band DX activity":
-      return 0.72;
+      return DX_EVENT_SCORING.eventTypeStrength.multiBandDxActivity;
     case "High spotter interest":
-      return 0.66;
+      return DX_EVENT_SCORING.eventTypeStrength.highSpotterInterest;
     default:
-      return 0.5;
+      return DX_EVENT_SCORING.eventTypeStrength.fallback;
   }
 }
 

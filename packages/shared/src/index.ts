@@ -13,4 +13,5 @@ export * from "./pathDensity.js";
 export * from "./pathStability.js";
 export * from "./parser.js";
 export * from "./pskTrends.js";
+export * from "./scoringConfig.js";
 export * from "./types.js";

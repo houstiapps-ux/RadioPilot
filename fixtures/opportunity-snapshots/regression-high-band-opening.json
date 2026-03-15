@@ -1,0 +1,208 @@
+{
+  "version": 1,
+  "capturedAt": "2026-03-15T12:00:00.000Z",
+  "userProfile": {
+    "homeGrid": "IO63UI"
+  },
+  "filters": {},
+  "input": {
+    "solar": {
+      "sfi": 135,
+      "kp": 2,
+      "aIndex": 8,
+      "muf": 24,
+      "updatedAt": "2026-03-15T11:55:00.000Z"
+    },
+    "psk": {
+      "summary": {
+        "generatedAt": "2026-03-15T12:00:00.000Z",
+        "freshnessTimestamp": "2026-03-15T11:59:30.000Z",
+        "currentWindowStart": "2026-03-15T11:45:00.000Z",
+        "previousWindowStart": "2026-03-15T11:30:00.000Z",
+        "windowMinutes": 15,
+        "bands": [
+          {
+            "band": "20m",
+            "currentWindowCount": 20,
+            "previousWindowCount": 20,
+            "trend": 0,
+            "modeCounts": {
+              "FT8": 10
+            },
+            "directionCounts": {
+              "W": 3
+            },
+            "pathCounts": {},
+            "uniqueSenderLocatorCount": 6,
+            "uniqueReceiverLocatorCount": 5
+          },
+          {
+            "band": "15m",
+            "currentWindowCount": 40,
+            "previousWindowCount": 5,
+            "trend": 35,
+            "modeCounts": {
+              "FT8": 30,
+              "FT4": 5
+            },
+            "directionCounts": {
+              "SW": 4
+            },
+            "pathCounts": {},
+            "uniqueSenderLocatorCount": 10,
+            "uniqueReceiverLocatorCount": 9
+          }
+        ]
+      },
+      "trends": {
+        "20m": {
+          "trend": "steady",
+          "volumeDelta": 0,
+          "uniqueCallDelta": 0,
+          "gridDelta": 0,
+          "confidence": "Medium"
+        },
+        "15m": {
+          "trend": "rising",
+          "volumeDelta": 0.8,
+          "uniqueCallDelta": 0.7,
+          "gridDelta": 0.6,
+          "confidence": "High"
+        }
+      },
+      "bandPredictions": {
+        "20m": {
+          "state": "stable",
+          "score": 0.52,
+          "volumeDelta": 0,
+          "uniqueCallDelta": 0,
+          "gridDelta": 0,
+          "directionStrength": 0.3,
+          "solarSupport": 0.5,
+          "signals": [
+            "20m holding steady"
+          ]
+        },
+        "15m": {
+          "state": "opening",
+          "score": 0.84,
+          "volumeDelta": 0.8,
+          "uniqueCallDelta": 0.7,
+          "gridDelta": 0.6,
+          "directionStrength": 0.5,
+          "solarSupport": 0.8,
+          "signals": [
+            "15m activity rising",
+            "Digital grids increasing",
+            "Solar supports 15m"
+          ]
+        }
+      },
+      "propagationDensity": {
+        "20m": {
+          "direction": "W",
+          "dominantDirection": "W",
+          "heading": 270,
+          "beamHeading": 270,
+          "confidence": "Medium",
+          "densities": {
+            "W": 0.24,
+            "NW": 0.17
+          }
+        },
+        "15m": {
+          "direction": "SW",
+          "dominantDirection": "SW",
+          "heading": 225,
+          "beamHeading": 225,
+          "confidence": "High",
+          "densities": {
+            "SW": 0.34,
+            "W": 0.18
+          }
+        }
+      }
+    },
+    "dx": {
+      "events": []
+    },
+    "spots": [
+      {
+        "id": "K1AAA|20m-1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "K1AAA",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN31PR",
+        "frequencyKHz": 14250,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:59:00.000Z",
+        "mode": "ssb",
+        "modeFamily": "phone",
+        "comment": "CQ",
+        "tags": [
+          "SSB"
+        ],
+        "receivedAt": "2026-03-15T11:59:00.000Z"
+      },
+      {
+        "id": "W1BBB|20m-2",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "W1BBB",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN20AB",
+        "frequencyKHz": 14074,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:58:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:58:00.000Z"
+      },
+      {
+        "id": "EA8ABC|20m-3",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "EA8ABC",
+        "continentDx": "AF",
+        "countryCode": "ES",
+        "dxLocator": "IL18",
+        "frequencyKHz": 14074,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:57:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:57:00.000Z"
+      },
+      {
+        "id": "LU1XYZ|15m-1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "LU1XYZ",
+        "continentDx": "SA",
+        "countryCode": "AR",
+        "dxLocator": "GF05",
+        "frequencyKHz": 21074,
+        "band": "15m",
+        "observedAt": "2026-03-15T11:58:30.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:58:30.000Z"
+      }
+    ]
+  }
+}

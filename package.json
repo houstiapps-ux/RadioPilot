@@ -8,7 +8,8 @@
     "worker": "pnpm --filter @radio-pilot/worker start",
     "web": "pnpm --filter @radio-pilot/web dev",
     "snapshot:opportunities": "pnpm --filter @radio-pilot/api exec tsx src/scripts/snapshot-opportunities.ts",
-    "replay:snapshot": "pnpm --filter @radio-pilot/api exec tsx src/scripts/replay-opportunity-snapshot.ts"
+    "replay:snapshot": "pnpm --filter @radio-pilot/api exec tsx src/scripts/replay-opportunity-snapshot.ts",
+    "test:opportunity-regression": "pnpm exec tsx --test packages/shared/src/opportunities.test.ts packages/shared/src/opportunityFixtureRegression.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",

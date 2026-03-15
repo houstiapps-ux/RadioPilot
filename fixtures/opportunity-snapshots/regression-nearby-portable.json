@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "capturedAt": "2026-03-15T12:00:00.000Z",
+  "userProfile": {
+    "homeGrid": "IO63UI"
+  },
+  "filters": {},
+  "input": {
+    "solar": {
+      "sfi": 105,
+      "kp": 1,
+      "aIndex": 6,
+      "muf": 14,
+      "updatedAt": "2026-03-15T11:55:00.000Z"
+    },
+    "psk": {
+      "summary": null,
+      "trends": {},
+      "bandPredictions": {},
+      "propagationDensity": {}
+    },
+    "dx": {
+      "events": []
+    },
+    "spots": [
+      {
+        "id": "EI7ABC/P|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "EI7ABC/P",
+        "continentDx": "EU",
+        "countryCode": "IE",
+        "dxLocator": "IO63VG",
+        "frequencyKHz": 7074,
+        "band": "40m",
+        "observedAt": "2026-03-15T11:59:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "SOTA activation",
+        "tags": [
+          "SOTA",
+          "/P",
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:59:00.000Z"
+      },
+      {
+        "id": "EA8ABC|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "EA8ABC",
+        "continentDx": "AF",
+        "countryCode": "ES",
+        "dxLocator": "IL18",
+        "frequencyKHz": 14074,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:58:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ DX",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:58:00.000Z"
+      }
+    ]
+  }
+}

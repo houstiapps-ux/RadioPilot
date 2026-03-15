@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "capturedAt": "2026-03-15T12:00:00.000Z",
+  "userProfile": {
+    "homeGrid": "IO63UI"
+  },
+  "filters": {
+    "chasing": "sota",
+    "mode": "digital",
+    "bandScope": "hf"
+  },
+  "input": {
+    "solar": {
+      "sfi": 100,
+      "kp": 2,
+      "aIndex": 10,
+      "muf": 14,
+      "updatedAt": "2026-03-15T11:55:00.000Z"
+    },
+    "psk": {
+      "summary": null,
+      "trends": {},
+      "bandPredictions": {},
+      "propagationDensity": {}
+    },
+    "dx": {
+      "events": []
+    },
+    "spots": [
+      {
+        "id": "K1ABC|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "K1ABC",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN31PR",
+        "frequencyKHz": 14250,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:59:00.000Z",
+        "mode": "ssb",
+        "modeFamily": "phone",
+        "comment": "CQ",
+        "tags": [
+          "SSB"
+        ],
+        "receivedAt": "2026-03-15T11:59:00.000Z"
+      },
+      {
+        "id": "EA8ABC|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "EA8ABC",
+        "continentDx": "AF",
+        "countryCode": "ES",
+        "dxLocator": "IL18",
+        "frequencyKHz": 14074,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:58:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ DX",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:58:00.000Z"
+      },
+      {
+        "id": "ON4CW|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "ON4CW",
+        "continentDx": "EU",
+        "countryCode": "BE",
+        "dxLocator": "JO20AB",
+        "frequencyKHz": 144174,
+        "band": "2m",
+        "observedAt": "2026-03-15T11:57:00.000Z",
+        "mode": "cw",
+        "modeFamily": "cw",
+        "comment": "CQ",
+        "tags": [
+          "CW"
+        ],
+        "receivedAt": "2026-03-15T11:57:00.000Z"
+      }
+    ]
+  }
+}

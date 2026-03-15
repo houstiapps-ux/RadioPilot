@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "capturedAt": "2026-03-15T12:00:00.000Z",
+  "userProfile": {
+    "homeGrid": "IO63UI"
+  },
+  "filters": {},
+  "input": {
+    "solar": {
+      "sfi": 110,
+      "kp": 2,
+      "aIndex": 12,
+      "muf": 18,
+      "updatedAt": "2026-03-15T11:55:00.000Z"
+    },
+    "psk": {
+      "summary": null,
+      "trends": {},
+      "bandPredictions": {},
+      "propagationDensity": {
+        "20m": {
+          "direction": "W",
+          "dominantDirection": "W",
+          "heading": 270,
+          "beamHeading": 270,
+          "confidence": "Medium",
+          "densities": {
+            "W": 0.3
+          }
+        },
+        "17m": {
+          "direction": "SE",
+          "dominantDirection": "SE",
+          "heading": 135,
+          "beamHeading": 135,
+          "confidence": "Medium",
+          "densities": {
+            "SE": 0.26
+          }
+        }
+      }
+    },
+    "dx": {
+      "rarity": {
+        "generatedAt": 1773576000000,
+        "callsigns": {
+          "K1AAA": 18,
+          "FT4GL": 1
+        },
+        "entities": {
+          "US": 24,
+          "FR": 1
+        }
+      },
+      "events": [
+        {
+          "callsign": "FT4GL",
+          "entity": "France",
+          "eventType": "Possible DXpedition",
+          "activityScore": 0.88,
+          "rarityScore": 0.95,
+          "spotterDiversity": 0.81,
+          "signals": [
+            "Rare DX active",
+            "Possible DXpedition",
+            "High spotter interest"
+          ]
+        }
+      ]
+    },
+    "spots": [
+      {
+        "id": "K1AAA|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "K1AAA",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN31PR",
+        "frequencyKHz": 14250,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:59:00.000Z",
+        "mode": "ssb",
+        "modeFamily": "phone",
+        "comment": "CQ",
+        "tags": [
+          "SSB"
+        ],
+        "receivedAt": "2026-03-15T11:59:00.000Z"
+      },
+      {
+        "id": "K1AAA|2",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "K1AAA",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN31PR",
+        "frequencyKHz": 14250,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:58:00.000Z",
+        "mode": "ssb",
+        "modeFamily": "phone",
+        "comment": "CQ",
+        "tags": [
+          "SSB"
+        ],
+        "receivedAt": "2026-03-15T11:58:00.000Z"
+      },
+      {
+        "id": "K1AAA|3",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "K1AAA",
+        "continentDx": "NA",
+        "countryCode": "US",
+        "dxLocator": "FN31PR",
+        "frequencyKHz": 14074,
+        "band": "20m",
+        "observedAt": "2026-03-15T11:57:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:57:00.000Z"
+      },
+      {
+        "id": "FT4GL|1",
+        "source": "dxheat",
+        "spotterCallsign": "EI2TEST",
+        "spottedCallsign": "FT4GL",
+        "continentDx": "AF",
+        "countryCode": "FR",
+        "dxLocator": "LH38",
+        "frequencyKHz": 18100,
+        "band": "17m",
+        "observedAt": "2026-03-15T11:56:00.000Z",
+        "mode": "ft8",
+        "modeFamily": "digital",
+        "comment": "CQ DX",
+        "tags": [
+          "FT8"
+        ],
+        "receivedAt": "2026-03-15T11:56:00.000Z"
+      }
+    ]
+  }
+}

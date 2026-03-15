@@ -10,6 +10,7 @@ import {
 
 type OpportunityCard = {
   id: string;
+  cardType?: "best" | "watch" | "dx" | "nearby";
   callsign: string;
   band: string | null;
   frequencyKHz: number;
@@ -30,6 +31,7 @@ type OpportunityCard = {
     solar: boolean;
   };
   supportChips?: readonly string[];
+  filterMatchLabels?: readonly string[];
   bandState?: "Opening" | "Stable" | "Fading";
   trendLabel?: "Rising" | "Steady" | "Falling";
   directionConfidence?: "High" | "Medium" | "Low";
@@ -61,10 +63,111 @@ type OpportunitySnapshot = {
   solar?: SolarData | null;
 };
 
+type DebugOpportunityCandidate = {
+  callsign: string;
+  band: string;
+  cardType: "best" | "watch";
+  filterMatchLabels: readonly string[];
+  scoreBreakdown: {
+    activityScore: number;
+    pathScore: number;
+    trendScore: number;
+    modeFitScore: number;
+    solarScore: number;
+    rarityScore: number;
+    userPreferenceScore: number;
+    nearbyScore?: number;
+    dxEventScore?: number;
+    totalScore: number;
+  };
+  rejectionReasons: readonly string[];
+};
+
+type DebugDxCandidate = {
+  callsign: string;
+  entity?: string;
+  eventType?: string;
+  band: string;
+  scoreBreakdown: {
+    activityScore: number;
+    pathScore: number;
+    trendScore: number;
+    modeFitScore: number;
+    solarScore: number;
+    rarityScore: number;
+    userPreferenceScore: number;
+    dxEventScore?: number;
+    totalScore: number;
+  };
+  rejectionReasons: readonly string[];
+  activityScore: number;
+  rarityScore: number;
+  eventScore: number;
+  pathScore: number;
+  solarScore: number;
+  finalDxScore: number;
+  signals: readonly string[];
+};
+
+type DebugNearbyCandidate = {
+  callsign: string;
+  distanceKm: number;
+  portable: boolean;
+  portableType: "SOTA" | "POTA" | "Portable" | null;
+  band: string;
+  score: number;
+  scoreBreakdown: {
+    activityScore: number;
+    pathScore: number;
+    trendScore: number;
+    modeFitScore: number;
+    solarScore: number;
+    rarityScore: number;
+    userPreferenceScore: number;
+    nearbyScore?: number;
+    totalScore: number;
+  };
+};
+
+type DebugBandPrediction = {
+  state?: string;
+  score?: number;
+  volumeDelta?: number;
+  uniqueCallDelta?: number;
+  gridDelta?: number;
+  directionStrength?: number;
+  solarSupport?: number;
+  signals?: readonly string[];
+};
+
+type DebugPropagationBand = {
+  dominantDirection?: string;
+  dominantSector: string | null;
+  heading?: number;
+  confidence: "High" | "Medium" | "Low";
+  densities: Record<string, number>;
+};
+
+type DebugOpportunityResponse = {
+  snapshot: OpportunitySnapshot;
+  candidates: readonly DebugOpportunityCandidate[];
+  dxCandidates: readonly DebugDxCandidate[];
+  nearbyCandidates: readonly DebugNearbyCandidate[];
+};
+
+type DevReviewData = {
+  opportunities: DebugOpportunityResponse | null;
+  bands: Record<string, DebugBandPrediction>;
+  propagation: Record<string, DebugPropagationBand>;
+};
+
 type LoadState = "loading" | "success" | "error";
 type PanelTone = "best" | "watch" | "dx" | "nearby";
 
 const opportunitiesUrl = "http://localhost:3000/api/opportunities";
+const debugOpportunitiesUrl = "http://localhost:3000/debug/opportunities";
+const debugBandsUrl = "http://localhost:3000/debug/bands";
+const debugPropagationUrl = "http://localhost:3000/debug/propagation";
 const opportunityPollIntervalMs = 30_000;
 const portableTags = new Set(["SOTA", "POTA", "WWFF", "/P"]);
 const modeTags = new Set(["CW", "SSB", "FT8", "FT4"]);
@@ -81,7 +184,12 @@ export function App() {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [settings, setSettings] = useState(loadOperatorSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [devReview, setDevReview] = useState<DevReviewData | null>(null);
   const settingsInputRef = useRef<HTMLInputElement | null>(null);
+  const showDevReview = useMemo(() => {
+    const query = new URLSearchParams(window.location.search);
+    return query.get("devReview") === "1";
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,10 +201,27 @@ export function App() {
         const requestUrl = query.size > 0
           ? `${opportunitiesUrl}?${query.toString()}`
           : opportunitiesUrl;
-        const response = await fetch(requestUrl);
+        const debugOpportunitiesRequestUrl = query.size > 0
+          ? `${debugOpportunitiesUrl}?${query.toString()}`
+          : debugOpportunitiesUrl;
+        const debugBandsRequestUrl = debugBandsUrl;
+        const debugPropagationRequestUrl = query.size > 0
+          ? `${debugPropagationUrl}?${query.toString()}`
+          : debugPropagationUrl;
+        const responses = await Promise.all([
+          fetch(requestUrl),
+          ...(showDevReview
+            ? [
+              fetch(debugOpportunitiesRequestUrl),
+              fetch(debugBandsRequestUrl),
+              fetch(debugPropagationRequestUrl),
+            ]
+            : []),
+        ]);
+        const response = responses[0];
 
-        if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`);
+        if (!response || !response.ok) {
+          throw new Error(`Request failed with status ${response?.status ?? "unknown"}`);
         }
 
         const data = (await response.json()) as OpportunitySnapshot;
@@ -104,10 +229,43 @@ export function App() {
         if (!cancelled) {
           setSnapshot(data);
           setLoadState("success");
+
+          if (showDevReview) {
+            const debugOpportunitiesResponse = responses[1];
+            const debugBandsResponse = responses[2];
+            const debugPropagationResponse = responses[3];
+
+            if (
+              !debugOpportunitiesResponse?.ok ||
+              !debugBandsResponse?.ok ||
+              !debugPropagationResponse?.ok
+            ) {
+              throw new Error("Debug review request failed");
+            }
+
+            const [debugOpportunities, debugBands, debugPropagation] = await Promise.all([
+              debugOpportunitiesResponse.json() as Promise<DebugOpportunityResponse>,
+              debugBandsResponse.json() as Promise<{ bands: Record<string, DebugBandPrediction> }>,
+              debugPropagationResponse.json() as Promise<Record<string, DebugPropagationBand>>,
+            ]);
+
+            if (!cancelled) {
+              setDevReview({
+                opportunities: debugOpportunities,
+                bands: debugBands.bands,
+                propagation: debugPropagation,
+              });
+            }
+          } else {
+            setDevReview(null);
+          }
         }
       } catch {
         if (!cancelled) {
           setLoadState("error");
+          if (showDevReview) {
+            setDevReview(null);
+          }
         }
       }
     }
@@ -262,7 +420,177 @@ export function App() {
           />
         </div>
       </section>
+
+      {showDevReview ? (
+        <DevReviewPanel
+          settings={settings}
+          snapshot={snapshot}
+          review={devReview}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function DevReviewPanel(props: {
+  settings: OperatorSettings;
+  snapshot: OpportunitySnapshot | null;
+  review: DevReviewData | null;
+}) {
+  const debug = props.review?.opportunities ?? null;
+  const selectedCards = [
+    props.snapshot?.bestOpportunity ?? null,
+    ...(props.snapshot?.watchNext ?? []),
+    props.snapshot?.dxOpportunity ?? null,
+    ...(props.snapshot?.nearbyActivity ?? []),
+  ].filter((card): card is OpportunityCard => Boolean(card));
+
+  return (
+    <section className="dev-review-panel">
+      <div className="dev-review-header">
+        <div>
+          <span className="strip-label">Developer Review</span>
+          <div className="dev-review-title">Opportunity inspection</div>
+        </div>
+        <div className="dev-review-hint">Add `?devReview=1` to the URL</div>
+      </div>
+
+      <div className="dev-review-grid">
+        <div className="dev-review-card">
+          <div className="dev-review-card-title">Active filters</div>
+          <div className="dev-review-inline-list">
+            <span>{formatChasingFilter(props.settings.chasing)}</span>
+            <span>{formatModeFilter(props.settings.modeFilter)}</span>
+            <span>{formatBandScopeFilter(props.settings.bandScope)}</span>
+          </div>
+        </div>
+
+        <div className="dev-review-card">
+          <div className="dev-review-card-title">Selected cards</div>
+          {selectedCards.length === 0 ? (
+            <div className="dev-review-empty">No cards selected.</div>
+          ) : (
+            <div className="dev-review-list">
+              {selectedCards.map((card) => (
+                <div key={`selected-${card.id}`} className="dev-review-list-item">
+                  <strong>{card.cardType ?? "card"}</strong> {card.band ?? "unknown"} {card.callsign}
+                  {" · "}
+                  {card.confidence ?? "n/a"}
+                  {card.confidenceReason ? ` · ${card.confidenceReason}` : ""}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="dev-review-card dev-review-span-2">
+          <div className="dev-review-card-title">Candidates</div>
+          {debug && debug.candidates.length > 0 ? (
+            <div className="dev-review-table-wrap">
+              <table className="dev-review-table">
+                <thead>
+                  <tr>
+                    <th>Call</th>
+                    <th>Band</th>
+                    <th>Card</th>
+                    <th>Total</th>
+                    <th>Breakdown</th>
+                    <th>Rejected</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {debug.candidates.map((candidate) => (
+                    <tr key={`candidate-${candidate.cardType}-${candidate.callsign}-${candidate.band}`}>
+                      <td>{candidate.callsign}</td>
+                      <td>{candidate.band}</td>
+                      <td>{candidate.cardType}</td>
+                      <td>{formatReviewScore(candidate.scoreBreakdown.totalScore)}</td>
+                      <td>{formatScoreBreakdown(candidate.scoreBreakdown)}</td>
+                      <td>{candidate.rejectionReasons.join(", ") || "selected"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="dev-review-empty">No candidate data loaded.</div>
+          )}
+        </div>
+
+        <div className="dev-review-card">
+          <div className="dev-review-card-title">DX candidates</div>
+          {debug && debug.dxCandidates.length > 0 ? (
+            <div className="dev-review-list">
+              {debug.dxCandidates.map((candidate) => (
+                <div key={`dx-${candidate.callsign}-${candidate.band}`} className="dev-review-list-item">
+                  <strong>{candidate.callsign}</strong> {candidate.band}
+                  {candidate.eventType ? ` · ${candidate.eventType}` : ""}
+                  {` · total ${formatReviewScore(candidate.scoreBreakdown.totalScore)}`}
+                  {candidate.rejectionReasons.length > 0 ? ` · ${candidate.rejectionReasons.join(", ")}` : ""}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="dev-review-empty">No DX candidates.</div>
+          )}
+        </div>
+
+        <div className="dev-review-card">
+          <div className="dev-review-card-title">Nearby candidates</div>
+          {debug && debug.nearbyCandidates.length > 0 ? (
+            <div className="dev-review-list">
+              {debug.nearbyCandidates.map((candidate) => (
+                <div key={`nearby-${candidate.callsign}-${candidate.band}`} className="dev-review-list-item">
+                  <strong>{candidate.callsign}</strong> {candidate.band}
+                  {` · ${candidate.distanceKm} km`}
+                  {candidate.portableType ? ` · ${candidate.portableType}` : ""}
+                  {` · total ${formatReviewScore(candidate.scoreBreakdown.totalScore)}`}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="dev-review-empty">No nearby candidates.</div>
+          )}
+        </div>
+
+        <div className="dev-review-card">
+          <div className="dev-review-card-title">Band states</div>
+          {Object.keys(props.review?.bands ?? {}).length > 0 ? (
+            <div className="dev-review-list">
+              {Object.entries(props.review?.bands ?? {}).map(([band, prediction]) => (
+                <div key={`band-${band}`} className="dev-review-list-item">
+                  <strong>{band}</strong>
+                  {prediction.state ? ` · ${prediction.state}` : ""}
+                  {typeof prediction.score === "number" ? ` · ${formatReviewScore(prediction.score)}` : ""}
+                  {prediction.signals?.length ? ` · ${prediction.signals.join(", ")}` : ""}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="dev-review-empty">No band prediction data.</div>
+          )}
+        </div>
+
+        <div className="dev-review-card">
+          <div className="dev-review-card-title">Propagation density</div>
+          {Object.keys(props.review?.propagation ?? {}).length > 0 ? (
+            <div className="dev-review-list">
+              {Object.entries(props.review?.propagation ?? {}).map(([band, density]) => (
+                <div key={`prop-${band}`} className="dev-review-list-item">
+                  <strong>{band}</strong>
+                  {density.dominantDirection ? ` · ${density.dominantDirection}` : ""}
+                  {density.dominantSector ? ` · ${density.dominantSector}` : ""}
+                  {` · ${density.confidence}`}
+                  {typeof density.heading === "number" ? ` · ${Math.round(density.heading)}°` : ""}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="dev-review-empty">No propagation data.</div>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -521,6 +849,7 @@ function OperatorCard(props: {
   const operationItem = getOperationIndicator(props.card.tags);
   const intelligenceChips = getIntelligenceChips(props.card, props.tone);
   const whyItems = getWhyItems(props.card, props.tone);
+  const filterMatches = props.card.filterMatchLabels ?? [];
 
   return (
     <article className={`operator-card ${props.featured ? "operator-card-featured" : ""}`}>
@@ -580,6 +909,13 @@ function OperatorCard(props: {
           {intelligenceChips.map((chip) => (
             <span key={chip} className="intel-chip">{chip}</span>
           ))}
+        </div>
+      ) : null}
+
+      {filterMatches.length > 0 ? (
+        <div className="match-row">
+          <span className="match-label">Matches:</span>
+          <span className="match-value">{filterMatches.join(" · ")}</span>
         </div>
       ) : null}
 
@@ -1455,6 +1791,56 @@ function clamp(value: number, min: number, max: number): number {
 
 function formatFrequency(value: number): string {
   return `${frequencyFormatter.format(value)} kHz`;
+}
+
+function formatReviewScore(value: number | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "n/a";
+  }
+
+  return value >= 10 ? value.toFixed(0) : value.toFixed(2);
+}
+
+function formatScoreBreakdown(value: {
+  activityScore: number;
+  pathScore: number;
+  trendScore: number;
+  modeFitScore: number;
+  solarScore: number;
+  rarityScore: number;
+  userPreferenceScore: number;
+  nearbyScore?: number;
+  dxEventScore?: number;
+  totalScore: number;
+}): string {
+  const parts = [
+    `act ${formatReviewScore(value.activityScore)}`,
+    `path ${formatReviewScore(value.pathScore)}`,
+    `trend ${formatReviewScore(value.trendScore)}`,
+    `mode ${formatReviewScore(value.modeFitScore)}`,
+  ];
+
+  if (value.solarScore > 0) {
+    parts.push(`solar ${formatReviewScore(value.solarScore)}`);
+  }
+
+  if (value.rarityScore > 0) {
+    parts.push(`rarity ${formatReviewScore(value.rarityScore)}`);
+  }
+
+  if (value.userPreferenceScore > 0) {
+    parts.push(`pref ${formatReviewScore(value.userPreferenceScore)}`);
+  }
+
+  if (typeof value.dxEventScore === "number" && value.dxEventScore > 0) {
+    parts.push(`dx ${formatReviewScore(value.dxEventScore)}`);
+  }
+
+  if (typeof value.nearbyScore === "number" && value.nearbyScore > 0) {
+    parts.push(`nearby ${formatReviewScore(value.nearbyScore)}`);
+  }
+
+  return parts.join(" · ");
 }
 
 function formatLastUpdated(value: string | undefined): string {

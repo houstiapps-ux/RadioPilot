@@ -1,5 +1,6 @@
 import { distanceKm as gridDistanceKm } from "./geo.js";
 import { estimatePathBetweenLocators, parseMaidenheadLocator } from "./maidenhead.js";
+import { NEARBY_SCORING } from "./scoringConfig.js";
 import type { OpportunityCard, OpportunityScoreBreakdown, ParsedSpot } from "./types.js";
 
 const MAX_NEARBY_DISTANCE_KM = 2_500;
@@ -69,16 +70,20 @@ export function findNearbyOpportunities(
       const bandSuitability = scoreBandSuitability(spot.band);
       const freshness = scoreFreshness(freshnessSeconds);
       const totalScore =
-        0.35 * distanceScore +
-        0.25 * activityScore +
-        0.20 * portableBoost +
-        0.10 * bandSuitability +
-        0.10 * freshness;
+        NEARBY_SCORING.weights.distance * distanceScore +
+        NEARBY_SCORING.weights.activity * activityScore +
+        NEARBY_SCORING.weights.portable * portableBoost +
+        NEARBY_SCORING.weights.bandSuitability * bandSuitability +
+        NEARBY_SCORING.weights.freshness * freshness;
       const distanceRounded = Math.round(distance);
-      const activityLevel = totalScore >= 0.72 ? "High" : totalScore >= 0.45 ? "Moderate" : "Low";
+      const activityLevel = totalScore >= NEARBY_SCORING.thresholds.highActivity
+        ? "High"
+        : totalScore >= NEARBY_SCORING.thresholds.moderateActivity
+          ? "Moderate"
+          : "Low";
       const confidence = portableType || distance <= REGIONAL_DISTANCE_KM
-        ? totalScore >= 0.65 ? "High" : "Medium"
-        : totalScore >= 0.55 ? "Medium" : "Low";
+        ? totalScore >= NEARBY_SCORING.thresholds.localHighConfidence ? "High" : "Medium"
+        : totalScore >= NEARBY_SCORING.thresholds.extendedHighConfidence ? "Medium" : "Low";
       const modeSummary = getModeSummary(spot);
       const why = buildWhy(spot, distanceRounded, portableType, activityScore, freshnessSeconds);
       const card: OpportunityCard = {
