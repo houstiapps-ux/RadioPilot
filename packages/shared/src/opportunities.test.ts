@@ -154,6 +154,35 @@ test("applies PSK summary boosts and exposes debug details", () => {
   assert.equal(debug.bands[0]?.pskBoostApplied, true);
 });
 
+test("prefers a rarer DX candidate over duplicating best opportunity", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const spots: StoredOpportunitySpot[] = [
+    createSpot("K1AAA", "FN31PR", "digital", "2026-03-15T11:58:00.000Z"),
+    createSpot("K1AAA", "FN31PR", "digital", "2026-03-15T11:57:00.000Z"),
+    createSpot("FT4GL", "LH38", "digital", "2026-03-15T11:56:00.000Z"),
+  ];
+
+  const debug = buildOpportunitySnapshotWithDebug(spots, {
+    now,
+    homeGrid: "IO63UI",
+    dxRarity: {
+      generatedAt: now,
+      callsigns: {
+        K1AAA: 18,
+        FT4GL: 1,
+      },
+      entities: {
+        US: 24,
+        FR: 1,
+      },
+    },
+  });
+
+  assert.equal(debug.snapshot.bestOpportunity?.callsign, "K1AAA");
+  assert.equal(debug.snapshot.dxOpportunity?.callsign, "FT4GL");
+  assert.ok(debug.dxCandidates.some((candidate) => candidate.callsign === "FT4GL"));
+});
+
 function createSpot(
   callsign: string,
   dxLocator: string,
@@ -165,7 +194,8 @@ function createSpot(
     source: "dxheat",
     spotterCallsign: "EI2TEST",
     spottedCallsign: callsign,
-    continentDx: "NA",
+    continentDx: callsign === "FT4GL" ? "AF" : "NA",
+    countryCode: callsign === "FT4GL" ? "FR" : "US",
     dxLocator,
     frequencyKHz: 14250,
     band: "20m",

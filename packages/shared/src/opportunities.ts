@@ -1,4 +1,8 @@
 import {
+  scoreDxCandidate,
+  type DxRarityContext,
+} from "./dxRarity.js";
+import {
   deriveContinentFromMaidenhead,
   estimatePathBetweenLocators,
   parseMaidenheadLocator,
@@ -9,6 +13,7 @@ import type {
   ParsedSpot,
   PskBandTrendMap,
   PskReporterSummary,
+  SolarConditions,
 } from "./types.js";
 
 const RECENT_WINDOW_MS = 15 * 60 * 1000;
@@ -19,6 +24,8 @@ interface BuildOpportunitySnapshotOptions {
   readonly operatingStyle?: string;
   readonly pskSummary?: PskReporterSummary | null;
   readonly pskTrends?: PskBandTrendMap | null;
+  readonly dxRarity?: DxRarityContext | null;
+  readonly solar?: SolarConditions | null;
 }
 
 export interface StoredOpportunitySpot extends ParsedSpot {
@@ -63,9 +70,21 @@ export interface OpportunityDebugBand {
   readonly pskTrend?: "rising" | "steady" | "falling";
 }
 
+export interface OpportunityDebugDxCandidate {
+  readonly callsign: string;
+  readonly entity?: string;
+  readonly band: string;
+  readonly activityScore: number;
+  readonly rarityScore: number;
+  readonly pathScore: number;
+  readonly solarScore: number;
+  readonly dxScore: number;
+}
+
 export interface OpportunityDebugSnapshot {
   readonly snapshot: OpportunitySnapshot;
   readonly bands: readonly OpportunityDebugBand[];
+  readonly dxCandidates: readonly OpportunityDebugDxCandidate[];
 }
 
 type ModeFamilyKey = "cw" | "phone" | "digital" | "unknown";
@@ -96,6 +115,7 @@ export function buildOpportunitySnapshotWithDebug(
   const normalizedOperatingStyle = normalizeOperatingStyle(options.operatingStyle);
   const pskByBand = indexPskSummaryByBand(options.pskSummary);
   const pskTrends = options.pskTrends ?? {};
+  const dxRarity = options.dxRarity ?? null;
   const currentSpots = allSpots.filter((spot) => {
     const spotTime = getSpotSortTime(spot);
     return spotTime >= currentWindowStart && spotTime <= now;
@@ -141,13 +161,18 @@ export function buildOpportunitySnapshotWithDebug(
       normalizedOperatingStyle,
     ),
   );
-  const dxOpportunity = hasAnyContinentData(statsByBand)
-    ? createDxOpportunityCard(
-      dxRankedBands.map(({ stats }) => stats),
-      normalizedHomeContinent ?? null,
-      normalizedHomeGrid,
-    )
-    : watchNextBands[0]?.card ?? null;
+  const dxCandidates = buildDxCandidates(
+    dxRankedBands.map(({ stats }) => stats),
+    normalizedHomeContinent ?? null,
+    normalizedHomeGrid,
+    dxRarity,
+    options.solar ?? null,
+  );
+  const dxOpportunity = selectDxOpportunityCard(
+    dxCandidates,
+    rankedCards[0] ?? null,
+    watchNextBands[0]?.card ?? null,
+  );
 
   const snapshot = {
     generatedAt: new Date(now).toISOString(),
@@ -169,6 +194,16 @@ export function buildOpportunitySnapshotWithDebug(
       pskPrevious: stats.pskPrevious,
       pskBoostApplied: stats.pskBandBoostApplied || stats.pskModeBoostApplied,
       pskTrend: stats.pskTrendLabel,
+    })),
+    dxCandidates: dxCandidates.map((candidate) => ({
+      callsign: candidate.card.callsign,
+      entity: candidate.entity,
+      band: candidate.card.band ?? "unknown",
+      activityScore: roundDebugScore(candidate.activityScore),
+      rarityScore: roundDebugScore(candidate.rarityScore),
+      pathScore: roundDebugScore(candidate.pathScore),
+      solarScore: roundDebugScore(candidate.solarScore),
+      dxScore: roundDebugScore(candidate.dxScore),
     })),
   };
 }
@@ -608,24 +643,90 @@ function getRepresentativePathEstimate(
   return estimatePathBetweenLocators(homeGrid, dxLocator);
 }
 
-function hasAnyContinentData(stats: readonly BandStats[]): boolean {
-  return stats.some((statsItem) => statsItem.offContinentSpots !== null);
-}
-
-function createDxOpportunityCard(
+function buildDxCandidates(
   statsByBand: readonly BandStats[],
   homeContinent: string | null,
-  homeGrid?: string,
-): OpportunityCard | null {
-  for (const stats of statsByBand) {
-    const representative = selectOffContinentRepresentativeSpot(stats.spots, homeContinent);
+  homeGrid: string | undefined,
+  dxRarity: DxRarityContext | null,
+  solar: SolarConditions | null,
+): readonly DxCandidate[] {
+  return statsByBand
+    .flatMap((stats) => buildBandDxCandidates(stats, homeContinent, homeGrid, dxRarity, solar))
+    .sort((left, right) => {
+      if (right.dxScore !== left.dxScore) {
+        return right.dxScore - left.dxScore;
+      }
 
-    if (representative) {
-      return createOpportunityCard(stats, representative, homeGrid);
+      if (right.rarityScore !== left.rarityScore) {
+        return right.rarityScore - left.rarityScore;
+      }
+
+      return right.card.score - left.card.score;
+    });
+}
+
+function selectDxOpportunityCard(
+  candidates: readonly DxCandidate[],
+  bestOpportunity: OpportunityCard | null,
+  fallback: OpportunityCard | null,
+): OpportunityCard | null {
+  for (const candidate of candidates) {
+    if (!isDuplicateOpportunity(candidate.card, bestOpportunity) || candidate.rarityScore >= 0.7) {
+      return candidate.card;
     }
   }
 
-  return statsByBand[0] ? createOpportunityCard(statsByBand[0], statsByBand[0].representative, homeGrid) : null;
+  return fallback;
+}
+
+function buildBandDxCandidates(
+  stats: BandStats,
+  homeContinent: string | null,
+  homeGrid?: string,
+  dxRarity?: DxRarityContext | null,
+  solar?: SolarConditions | null,
+): readonly DxCandidate[] {
+  const latestByCallsign = new Map<string, StoredOpportunitySpot>();
+
+  for (const spot of stats.spots) {
+    const existing = latestByCallsign.get(spot.spottedCallsign);
+
+    if (!existing || getSpotSortTime(spot) > getSpotSortTime(existing)) {
+      latestByCallsign.set(spot.spottedCallsign, spot);
+    }
+  }
+
+  return [...latestByCallsign.values()].map((representative) => {
+    const entity = representative.countryCode ?? representative.continentDx;
+    const activityScore = scoreDxActivity(stats, representative);
+    const pathScore = scoreDxPath(stats, representative, homeContinent, homeGrid);
+      const solarScore = scoreDxSolar(stats.bandKey, solar ?? null);
+    const scored = scoreDxCandidate(
+      {
+        callsign: representative.spottedCallsign,
+        entity,
+        activityScore,
+        pathScore,
+        solarScore,
+      },
+      dxRarity,
+    );
+    const baseCard = createOpportunityCard(stats, representative, homeGrid);
+
+    return {
+      card: {
+        ...baseCard,
+        summary: `${baseCard.summary}, ${buildDxReasonSummary(representative.spottedCallsign, entity, scored.rarityScore, activityScore)}`,
+        score: Math.round(baseCard.score + scored.dxScore * 100),
+      },
+      entity,
+      activityScore: scored.activityScore,
+      rarityScore: scored.rarityScore,
+      pathScore: scored.pathScore,
+      solarScore: scored.solarScore,
+      dxScore: scored.dxScore,
+    };
+  });
 }
 
 function compareDxBandStats(
@@ -657,6 +758,112 @@ function compareDxBandStats(
   }
 
   return compareCards(leftCard, rightCard, left, right, operatingStyle);
+}
+
+function scoreDxActivity(
+  stats: BandStats,
+  representative: StoredOpportunitySpot,
+): number {
+  const callSpotCount = stats.spots.filter((spot) =>
+    spot.spottedCallsign === representative.spottedCallsign
+  ).length;
+
+  return clamp01((callSpotCount / 3) * 0.65 + (stats.uniqueCallsigns / 10) * 0.35);
+}
+
+function scoreDxPath(
+  stats: BandStats,
+  representative: StoredOpportunitySpot,
+  homeContinent: string | null,
+  homeGrid: string | undefined,
+): number {
+  let score = 0.2;
+  const representativeContinent = normalizeContinent(representative.continentDx);
+  const pathEstimate = getRepresentativePathEstimate(representative, homeGrid);
+
+  if (homeContinent && representativeContinent && representativeContinent !== homeContinent) {
+    score += 0.4;
+  }
+
+  if (pathEstimate) {
+    score += 0.25;
+
+    if (pathEstimate.distanceKm >= 5000) {
+      score += 0.1;
+    }
+  }
+
+  if (stats.pskCurrent >= 20) {
+    score += 0.05;
+  }
+
+  return clamp01(score);
+}
+
+function scoreDxSolar(bandKey: string, solar: SolarConditions | null): number {
+  const muf = getSolarMuf(solar);
+  const sfi = typeof solar?.sfi === "number" ? solar.sfi : null;
+  let score = 0.35;
+
+  if (bandKey === "10m" && muf !== null && muf >= 28) {
+    score += 0.45;
+  } else if (bandKey === "15m" && muf !== null && muf >= 21) {
+    score += 0.4;
+  } else if (bandKey === "17m" && muf !== null && muf >= 18) {
+    score += 0.35;
+  } else if (bandKey === "20m") {
+    score += 0.2;
+  }
+
+  if (sfi !== null) {
+    if (sfi >= 150 && (bandKey === "10m" || bandKey === "12m" || bandKey === "15m")) {
+      score += 0.2;
+    } else if (sfi >= 110) {
+      score += 0.1;
+    }
+  }
+
+  return clamp01(score);
+}
+
+function buildDxReasonSummary(
+  callsign: string,
+  entity: string | undefined,
+  rarityScore: number,
+  activityScore: number,
+): string {
+  if (rarityScore >= 0.85 && entity) {
+    return "Rare entity active now";
+  }
+
+  if (rarityScore >= 0.7) {
+    return "Currently workable DX with low recent appearance rate";
+  }
+
+  if (activityScore >= 0.65) {
+    return "Uncommon callsign with multiple fresh spots";
+  }
+
+  return `${callsign} active now`;
+}
+
+function isDuplicateOpportunity(
+  left: OpportunityCard,
+  right: OpportunityCard | null,
+): boolean {
+  if (!right) {
+    return false;
+  }
+
+  if (left.callsign !== right.callsign) {
+    return false;
+  }
+
+  if (left.band !== right.band) {
+    return false;
+  }
+
+  return Math.abs(left.frequencyKHz - right.frequencyKHz) <= 10;
 }
 
 function getDominantModeFamily(
@@ -730,20 +937,6 @@ function selectPortableRepresentativeSpot(
   spots: readonly StoredOpportunitySpot[],
 ): StoredOpportunitySpot | null {
   return selectPreferredRepresentativeSpot(spots, (spot) => isPortableSpot(spot));
-}
-
-function selectOffContinentRepresentativeSpot(
-  spots: readonly StoredOpportunitySpot[],
-  homeContinent: string | null,
-): StoredOpportunitySpot | null {
-  if (!homeContinent) {
-    return null;
-  }
-
-  return selectPreferredRepresentativeSpot(spots, (spot) => {
-    const continentDx = normalizeContinent(spot.continentDx);
-    return continentDx !== null && continentDx !== homeContinent;
-  });
 }
 
 function selectPreferredRepresentativeSpot(
@@ -1051,6 +1244,16 @@ interface PskBandSummary {
   readonly modeCounts: Readonly<Record<string, number>>;
 }
 
+interface DxCandidate {
+  readonly card: OpportunityCard;
+  readonly entity?: string;
+  readonly activityScore: number;
+  readonly rarityScore: number;
+  readonly pathScore: number;
+  readonly solarScore: number;
+  readonly dxScore: number;
+}
+
 function indexPskSummaryByBand(
   summary: PskReporterSummary | null | undefined,
 ): ReadonlyMap<string, PskBandSummary> {
@@ -1106,4 +1309,25 @@ function shouldApplyPskModeBoost(
 
   const digitalCount = (modeCounts.FT8 ?? 0) + (modeCounts.FT4 ?? 0) + (modeCounts.DIGITAL ?? 0);
   return digitalCount >= 20;
+}
+
+function roundDebugScore(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function getSolarMuf(solar: SolarConditions | null): number | null {
+  if (typeof solar?.muf === "number" && Number.isFinite(solar.muf)) {
+    return solar.muf;
+  }
+
+  if (typeof solar?.muf === "string") {
+    const parsed = Number.parseFloat(solar.muf);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }

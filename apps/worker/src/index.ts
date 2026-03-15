@@ -11,6 +11,7 @@ import {
   type PskBandWindowSummary,
   type PskReporterSummary,
   type SolarConditions,
+  updateDxBaseline,
 } from "@radio-pilot/shared";
 import { createClient } from "redis";
 import { fetchDxHeatSpots } from "./sources/dxheat.js";
@@ -457,6 +458,7 @@ async function persistSpot(parsedSpot: ParsedSpot, rawLine?: string): Promise<vo
     rawLine,
   });
 
+  await updateDxBaseline([parsedSpot], redis, now);
   await redis.zAdd("spots:recent", { score: now, value: payload });
   await pruneRecentSortedSpots();
   await redis.set("freshness:dxcluster", String(now));
@@ -495,6 +497,7 @@ async function persistDxHeatSpot(parsedSpot: ParsedSpot): Promise<boolean> {
     receivedAt: new Date().toISOString(),
   });
 
+  await updateDxBaseline([parsedSpot], redis, observedAtMs);
   await redis.zAdd("spots:recent", { score: observedAtMs, value: payload });
   return true;
 }

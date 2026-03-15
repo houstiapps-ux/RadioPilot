@@ -4,8 +4,8 @@ import dotenv from "dotenv";
 import Fastify from "fastify";
 
 import {
-  buildOpportunitySnapshot,
   buildOpportunitySnapshotWithDebug,
+  loadDxRarityContext,
   getAllBandTrends,
   parseMaidenheadLocator,
   parseStoredOpportunitySpot,
@@ -299,6 +299,7 @@ async function buildPersonalizedSnapshotDebug(
     getAllBandTrends(redis),
   ]);
   const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
+  const dxRarity = await loadDxRarityContext(redis, spots, now);
   const solar = parseSolar(rawSolar);
   const pskSummary = parsePskSummary(rawPsk);
   const spotsWithDxLocator = spots.filter((spot) => typeof spot.dxLocator === "string").length;
@@ -320,7 +321,7 @@ async function buildPersonalizedSnapshotDebug(
       solar,
     };
 
-    return { snapshot: empty, bands: [] };
+    return { snapshot: empty, bands: [], dxCandidates: [] };
   }
 
   const built = buildOpportunitySnapshotWithDebug(spots, {
@@ -329,6 +330,8 @@ async function buildPersonalizedSnapshotDebug(
     operatingStyle,
     pskSummary: isFreshPskSummary(pskSummary, now) ? pskSummary : null,
     pskTrends: filterFreshPskTrends(pskTrends, now),
+    dxRarity,
+    solar,
   });
   const snapshot = {
     ...built.snapshot,
