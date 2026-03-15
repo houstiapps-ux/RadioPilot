@@ -1,4 +1,5 @@
 import type { Band } from "./bands.js";
+import { predictAllBands } from "./bandPredictor.js";
 import {
   deriveContinentFromMaidenhead,
   estimatePathBetweenLocators,
@@ -8,7 +9,13 @@ import {
   parseStoredOpportunitySpot,
   type StoredOpportunitySpot,
 } from "./opportunities.js";
-import type { PskReporterSummary, SolarConditions, SpotTag } from "./types.js";
+import type {
+  BandPrediction,
+  BandPredictionMap,
+  PskReporterSummary,
+  SolarConditions,
+  SpotTag,
+} from "./types.js";
 
 const RECENT_WINDOW_MS = 15 * 60 * 1000;
 const DISTANCE_NEARBY_KM = 1_500;
@@ -53,6 +60,10 @@ export interface OpportunityEngineCard {
   readonly direction: string;
   readonly beamHeading: number;
   readonly confidence: "High" | "Medium" | "Low";
+  readonly bandState?: "Opening" | "Stable" | "Fading";
+  readonly trendLabel?: "Rising" | "Steady" | "Falling";
+  readonly signals?: readonly string[];
+  readonly why?: readonly string[];
   readonly callsign?: string;
   readonly frequency?: number;
   readonly entity?: string;
@@ -90,6 +101,10 @@ interface CandidateEvidence {
   readonly totalScore: number;
   readonly confidence: "High" | "Medium" | "Low";
   readonly reason: readonly string[];
+  readonly signals: readonly string[];
+  readonly why: readonly string[];
+  readonly bandState: "Opening" | "Stable" | "Fading";
+  readonly trendLabel: "Rising" | "Steady" | "Falling";
   readonly offContinent: boolean;
   readonly portable: boolean;
   readonly nearbyDistanceKm?: number;
@@ -103,6 +118,7 @@ interface BandContext {
   readonly pskPrevious: number;
   readonly pskModeCounts: Readonly<Record<string, number>>;
   readonly pskDirectionCounts: Readonly<Record<(typeof directionOrder)[number], number>>;
+  readonly bandPrediction: BandPrediction | null;
 }
 
 interface LoadedRedisState {
@@ -110,6 +126,7 @@ interface LoadedRedisState {
   readonly pskSummary: PskReporterSummary | null;
   readonly pskDirectionalCounts: ReadonlyMap<Band, Readonly<Record<(typeof directionOrder)[number], number>>>;
   readonly solar: SolarConditions | null;
+  readonly bandPredictions: BandPredictionMap;
 }
 
 interface NormalizedUserProfile {
@@ -161,12 +178,13 @@ export async function generateOpportunities(
 
 async function loadRedisState(redisClient: OpportunityRedisClient): Promise<LoadedRedisState> {
   const now = Date.now();
-  const [rawSpots, rawPskSummary, rawPskFreshness, rawSolarCurrent, rawSolarLatest] = await Promise.all([
+  const [rawSpots, rawPskSummary, rawPskFreshness, rawSolarCurrent, rawSolarLatest, bandPredictions] = await Promise.all([
     redisClient.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
     redisClient.get("psk:summary"),
     redisClient.get("psk:freshness"),
     redisClient.get("solar:current"),
     redisClient.get("solar:latest"),
+    predictAllBands(redisClient),
   ]);
 
   return {
@@ -174,6 +192,7 @@ async function loadRedisState(redisClient: OpportunityRedisClient): Promise<Load
     pskSummary: parseFreshPskSummary(rawPskSummary, rawPskFreshness),
     pskDirectionalCounts: await loadDirectionalCounts(redisClient),
     solar: parseSolar(rawSolarCurrent) ?? parseSolar(rawSolarLatest),
+    bandPredictions,
   };
 }
 
@@ -233,6 +252,7 @@ function buildBandCandidate(
     pskPrevious: pskBand?.previousWindowCount ?? 0,
     pskModeCounts: pskBand?.modeCounts ?? {},
     pskDirectionCounts: state.pskDirectionalCounts.get(band) ?? emptyDirectionCounts(),
+    bandPrediction: state.bandPredictions[band] ?? null,
   };
   const direction = inferDirection(userProfile.homeGrid, representative, context);
   const beamHeading = inferBeamHeading(userProfile.homeGrid, representative, direction);
@@ -273,6 +293,10 @@ function buildBandCandidate(
     totalScore,
     confidence: deriveConfidence(activityScore, pathScore, trendScore, solarScore, context),
     reason: buildReasonList(context, representative, mode, direction, offContinent, state.solar, userProfile),
+    signals: buildSignals(context, representative, mode, direction),
+    why: buildWhy(context, representative, mode, offContinent, state.solar),
+    bandState: toBandState(context.bandPrediction),
+    trendLabel: toTrendLabel(context.bandPrediction, context),
     offContinent,
     portable: isPortable(representative.tags),
   };
@@ -285,6 +309,13 @@ function selectWatchNext(
   return candidates
     .filter((candidate) => candidate.band !== bestCandidate?.band)
     .sort((left, right) => {
+      const leftWatchScore = scoreWatchNextCandidate(left, bestCandidate);
+      const rightWatchScore = scoreWatchNextCandidate(right, bestCandidate);
+
+      if (rightWatchScore !== leftWatchScore) {
+        return rightWatchScore - leftWatchScore;
+      }
+
       if (right.trendScore !== left.trendScore) {
         return right.trendScore - left.trendScore;
       }
@@ -339,6 +370,7 @@ function selectNearbyActivity(
         pskPrevious: 0,
         pskModeCounts: {},
         pskDirectionCounts: emptyDirectionCounts(),
+        bandPrediction: null,
       };
       const direction = inferDirection(userProfile.homeGrid, spot, context);
       const beamHeading = inferBeamHeading(userProfile.homeGrid, spot, direction);
@@ -386,6 +418,20 @@ function selectNearbyActivity(
             distanceKm !== null ? `${Math.round(distanceKm)} km from station` : "Regional station",
             "Short-haul path currently active",
           ],
+        signals: portable
+          ? ["Portable nearby", `${spot.band} regional activity`]
+          : [`${spot.band} regional activity`, "Nearby path active"],
+        why: portable
+          ? [
+            `${spot.tags.find((tag) => isPortableTag(tag)) ?? "Portable"} activity detected`,
+            distanceKm !== null ? `${Math.round(distanceKm)} km from station` : "Regional portable activity",
+          ]
+          : [
+            distanceKm !== null ? `${Math.round(distanceKm)} km from station` : "Regional station",
+            "Good fit for nearby work",
+          ],
+        bandState: "Stable" as const,
+        trendLabel: "Steady" as const,
         offContinent: false,
         portable,
         nearbyDistanceKm: distanceKm ?? undefined,
@@ -405,6 +451,10 @@ function toCard(candidate: CandidateEvidence | null): OpportunityEngineCard | nu
     direction: directionLabel(candidate.direction),
     beamHeading: candidate.beamHeading,
     confidence: candidate.confidence,
+    bandState: candidate.bandState,
+    trendLabel: candidate.trendLabel,
+    signals: candidate.signals,
+    why: candidate.why,
     callsign: candidate.callsign,
     frequency: candidate.frequency,
     entity: candidate.entity,
@@ -510,7 +560,12 @@ function scoreTrend(context: BandContext): number {
     ? ((context.pskCurrent - context.pskPrevious) / context.pskPrevious) * 100
     : context.pskCurrent > 0 ? 40 : 0;
   const spotTrend = context.currentSpots.length - context.previousSpots.length;
-  return clamp(40 + pskTrend * 0.5 + spotTrend * 6, 0, 100);
+  const predictorBoost = context.bandPrediction?.state === "opening"
+    ? 12
+    : context.bandPrediction?.state === "fading"
+      ? -14
+      : 0;
+  return clamp(40 + pskTrend * 0.5 + spotTrend * 6 + predictorBoost, 0, 100);
 }
 
 function scoreModeFit(
@@ -654,6 +709,87 @@ function buildReasonList(
   return reasons;
 }
 
+function buildSignals(
+  context: BandContext,
+  representative: StoredOpportunitySpot,
+  mode: string,
+  direction: (typeof directionOrder)[number],
+): readonly string[] {
+  const signals: string[] = [];
+
+  if (context.currentSpots.length >= 6) {
+    signals.push(`${context.band} cluster active`);
+  }
+
+  if (context.bandPrediction) {
+    for (const signal of context.bandPrediction.signals) {
+      if (!signals.includes(signal)) {
+        signals.push(signal);
+      }
+    }
+  }
+
+  if (context.pskCurrent > context.pskPrevious * 1.2 && context.pskCurrent > 0) {
+    signals.push("PSK rising");
+  } else if (context.pskCurrent > 0) {
+    signals.push("PSK steady");
+  }
+
+  signals.push(`${directionLabel(direction)} path active`);
+
+  if (mode === "FT8" || mode === "FT4") {
+    signals.push(`${mode} supported`);
+  } else if (mode === "SSB") {
+    signals.push("SSB likely good");
+  } else if (mode === "CW") {
+    signals.push("CW possible");
+  }
+
+  if (isPortable(representative.tags)) {
+    signals.push("Portable nearby");
+  }
+
+  return signals.slice(0, 5);
+}
+
+function buildWhy(
+  context: BandContext,
+  representative: StoredOpportunitySpot,
+  mode: string,
+  offContinent: boolean,
+  solar: SolarConditions | null,
+): readonly string[] {
+  const why = [`${context.currentSpots.length} recent spots on ${context.band}`];
+  const uniqueCallsigns = new Set(context.currentSpots.map((spot) => spot.spottedCallsign)).size;
+  why.push(`${uniqueCallsigns} unique calls`);
+
+  if (context.pskCurrent > 0) {
+    why.push(`${context.pskCurrent} PSK reports confirm activity`);
+  }
+
+  if (context.bandPrediction?.state === "opening") {
+    why.push(`${context.band} opening`);
+  } else if (context.bandPrediction?.state === "fading") {
+    why.push(`${context.band} fading`);
+  }
+
+  if (solar) {
+    const muf = normalizeSolarNumber(solar.muf);
+
+    if (muf !== null && representative.band && bandLooksSupportedByMuf(representative.band, muf)) {
+      why.push(`Solar supports ${representative.band}`);
+    }
+  }
+
+  if (offContinent) {
+    why.push("Off-continent path active");
+  } else if (mode === "FT8" || mode === "FT4") {
+    why.push("Digital path supported");
+  }
+
+  return why.slice(0, 5);
+}
+
 function deriveConfidence(
   activityScore: number,
   pathScore: number,
@@ -692,6 +828,38 @@ function deriveConfidence(
   }
 
   return "Low";
+}
+
+function scoreWatchNextCandidate(
+  candidate: CandidateEvidence,
+  bestCandidate: CandidateEvidence | null,
+): number {
+  let score = candidate.totalScore * 0.35 + candidate.trendScore * 0.35;
+
+  if (candidate.bandState === "Opening") {
+    score += 35;
+  } else if (candidate.bandState === "Fading") {
+    score -= 24;
+  }
+
+  if (candidate.trendLabel === "Rising") {
+    score += 18;
+  } else if (candidate.trendLabel === "Falling") {
+    score -= 12;
+  }
+
+  if (candidate.signals.includes("Digital grids increasing")) {
+    score += 8;
+  }
+
+  if (candidate.signals.includes("Directional PSK support")) {
+    score += 10;
+  }
+
+  const clusterGap = bestCandidate ? Math.max(0, bestCandidate.activityScore - candidate.activityScore) : 0;
+  score -= Math.min(18, clusterGap * 0.12);
+
+  return score;
 }
 
 function inferDirection(
@@ -817,6 +985,43 @@ function directionLabel(direction: (typeof directionOrder)[number]): string {
   return labels[direction];
 }
 
+function toBandState(
+  prediction: BandPrediction | null,
+): "Opening" | "Stable" | "Fading" {
+  if (prediction?.state === "opening") {
+    return "Opening";
+  }
+
+  if (prediction?.state === "fading") {
+    return "Fading";
+  }
+
+  return "Stable";
+}
+
+function toTrendLabel(
+  prediction: BandPrediction | null,
+  context: BandContext,
+): "Rising" | "Steady" | "Falling" {
+  if (prediction?.state === "opening") {
+    return "Rising";
+  }
+
+  if (prediction?.state === "fading") {
+    return "Falling";
+  }
+
+  if (context.pskCurrent > context.pskPrevious * 1.2 && context.pskCurrent > 0) {
+    return "Rising";
+  }
+
+  if (context.pskPrevious > 0 && context.pskCurrent < context.pskPrevious * 0.8) {
+    return "Falling";
+  }
+
+  return "Steady";
+}
+
 function isOffContinent(spot: StoredOpportunitySpot, homeContinent: string): boolean {
   const dxContinent = spot.continentDx?.trim().toUpperCase()
     ?? (spot.dxLocator ? deriveContinentFromMaidenhead(spot.dxLocator) : undefined);
@@ -856,6 +1061,30 @@ function normalizeSolarNumber(value: number | string | undefined): number | null
   }
 
   return null;
+}
+
+function bandLooksSupportedByMuf(band: Band, muf: number): boolean {
+  if (band === "10m") {
+    return muf >= 28;
+  }
+
+  if (band === "12m") {
+    return muf >= 24;
+  }
+
+  if (band === "15m") {
+    return muf >= 21;
+  }
+
+  if (band === "17m") {
+    return muf >= 18;
+  }
+
+  if (band === "20m") {
+    return muf >= 14;
+  }
+
+  return true;
 }
 
 function emptyDirectionCounts(): Record<(typeof directionOrder)[number], number> {

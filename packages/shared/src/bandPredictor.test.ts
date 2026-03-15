@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeBandPrediction, predictBandOpenings } from "./bandPredictor.js";
+import { predictAllBands, predictBandState } from "./bandPredictor.js";
 
 test("predicts an opening band from stronger current PSK activity and solar support", () => {
-  const prediction = computeBandPrediction(
+  const prediction = predictBandState(
     "10m",
     {
       count: 80,
@@ -31,6 +31,9 @@ test("predicts an opening band from stronger current PSK activity and solar supp
 
   assert.equal(prediction.state, "opening");
   assert.ok(prediction.score > 0.7);
+  assert.ok(prediction.volumeDelta > 0);
+  assert.ok(prediction.directionStrength > 0);
+  assert.ok(prediction.solarSupport > 0.5);
   assert.ok(prediction.signals.includes("10m activity rising"));
 });
 
@@ -60,12 +63,13 @@ test("loads per-band predictions from redis-like keys", async () => {
     })],
   ]);
 
-  const predictions = await predictBandOpenings({
+  const predictions = await predictAllBands({
     async get(key: string) {
       return values.get(key) ?? null;
     },
-  }, {});
+  });
 
   assert.ok(predictions["15m"]);
   assert.equal(predictions["15m"]?.state, "opening");
+  assert.equal(typeof predictions["15m"]?.gridDelta, "number");
 });

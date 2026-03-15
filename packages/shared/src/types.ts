@@ -134,6 +134,11 @@ export type PskBandTrendMap = Readonly<Partial<Record<Band, PskBandTrend>>>;
 export interface BandPrediction {
   readonly state: "opening" | "stable" | "fading";
   readonly score: number;
+  readonly volumeDelta: number;
+  readonly uniqueCallDelta: number;
+  readonly gridDelta: number;
+  readonly directionStrength: number;
+  readonly solarSupport: number;
   readonly signals: readonly string[];
 }
 
