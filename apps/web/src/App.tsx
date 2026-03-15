@@ -421,7 +421,7 @@ function OperatorCard(props: {
 }) {
   const view = toOperatorView(props.card, props.tone);
   const modeItems = getModeIndicators(props.card);
-  const operationItems = getOperationIndicators(props.card.tags);
+  const operationItem = getOperationIndicator(props.card.tags);
 
   return (
     <article className={`operator-card ${props.featured ? "operator-card-featured" : ""}`}>
@@ -462,24 +462,24 @@ function OperatorCard(props: {
       <div className="operation-block">
         <span className="operation-label">Operation</span>
         <div className="tag-strip">
-          {operationItems.length > 0 ? (
-            operationItems.map((item) => item.kind === "icon"
+          {operationItem ? (
+            operationItem.kind === "icon"
               ? (
                 <span
-                  key={item.id}
+                  key={operationItem.id}
                   className="tag-chip tag-chip-icon"
-                  title={item.label}
-                  aria-label={item.label}
+                  title={operationItem.label}
+                  aria-label={operationItem.label}
                 >
-                  <span className="inline-symbol" aria-hidden="true">{item.glyph}</span>
-                  <span>{item.text}</span>
+                  <span className="inline-symbol" aria-hidden="true">{operationItem.glyph}</span>
+                  <span>{operationItem.text}</span>
                 </span>
               )
               : (
-                <span key={item.id} className="tag-chip">
-                  {item.text}
+                <span key={operationItem.id} className="tag-chip">
+                  {operationItem.text}
                 </span>
-              ))
+              )
           ) : (
             <span className="tag-chip tag-chip-muted">Fixed station</span>
           )}
@@ -560,10 +560,13 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   reasonSummary: string;
   tagItems: readonly string[];
 } {
-  const directionLine = safeText(card.direction, "Direction unavailable");
+  const directionLine = card.direction ? formatDirectionShort(card.direction) : "Direction unavailable";
   const beamHeading = typeof card.bearing === "number" && Number.isFinite(card.bearing)
     ? `${Math.round(card.bearing)}°`
     : "Unavailable";
+  const conciseBeamHeading = beamHeading === "Unavailable"
+    ? beamHeading
+    : beamHeading.replace("Â°", "°").replace(/^(\d+)/, "~$1");
   const confidence = getConfidence(card.score);
   const callsign = safeText(
     card.callsign,
@@ -582,9 +585,9 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine: card.direction ? directionLine : "Trend building",
-      beamHeading,
+      beamHeading: conciseBeamHeading,
       confidence,
-      reasonSummary: safeText(card.summary, "Activity is rising."),
+      reasonSummary: formatOperatorSummary(card.summary, "Activity rising."),
       tagItems: card.tags,
     };
   }
@@ -595,9 +598,9 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine,
-      beamHeading,
+      beamHeading: conciseBeamHeading,
       confidence,
-      reasonSummary: safeText(card.summary, "Distant DX is showing."),
+      reasonSummary: formatOperatorSummary(card.summary, "DX active now."),
       tagItems: card.tags,
     };
   }
@@ -608,9 +611,9 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine: card.direction ? directionLine : "Nearby path unavailable",
-      beamHeading,
+      beamHeading: conciseBeamHeading,
       confidence,
-      reasonSummary: safeText(card.summary, "Portable activity is active."),
+      reasonSummary: formatOperatorSummary(card.summary, "Portable activity active."),
       tagItems: card.tags,
     };
   }
@@ -620,9 +623,9 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
     primaryLine: callsign,
     country: formatCountry(card.countryCode),
     directionLine,
-    beamHeading,
+    beamHeading: conciseBeamHeading,
     confidence,
-    reasonSummary: safeText(card.summary, "Best current opening."),
+    reasonSummary: formatOperatorSummary(card.summary, "Best current opening."),
     tagItems: card.tags,
   };
 }
@@ -734,22 +737,52 @@ function getTagIndicator(tag: string): TagIndicator {
   return { kind: "text", id: `tag-${normalized}`, text: tag };
 }
 
-function getOperationIndicators(tags: readonly string[]): readonly TagIndicator[] {
-  const indicators = tags
-    .map(getTagIndicator)
-    .filter((item) => !modeTags.has(item.text.toUpperCase()));
+function getOperationIndicator(tags: readonly string[]): TagIndicator | null {
+  const normalizedTags = tags.map((tag) => tag.toUpperCase());
 
-  return indicators.map((item) => {
-    if (item.id === "tag-portable") {
-      return {
-        ...item,
-        text: "Portable (/P)",
-        label: "Portable station",
-      };
-    }
+  if (normalizedTags.includes("SOTA")) {
+    return getTagIndicator("SOTA");
+  }
 
-    return item;
-  });
+  if (normalizedTags.includes("POTA")) {
+    return getTagIndicator("POTA");
+  }
+
+  if (normalizedTags.includes("/P")) {
+    return {
+      kind: "icon",
+      id: "operation-portable",
+      glyph: "🎒",
+      label: "Portable station",
+      text: "Portable (/P)",
+    };
+  }
+
+  if (normalizedTags.includes("/M")) {
+    return {
+      kind: "text",
+      id: "operation-mobile",
+      text: "Mobile (/M)",
+    };
+  }
+
+  if (normalizedTags.includes("/MM")) {
+    return {
+      kind: "text",
+      id: "operation-maritime",
+      text: "Maritime (/MM)",
+    };
+  }
+
+  if (normalizedTags.some((tag) => tag.includes("SPECIAL"))) {
+    return {
+      kind: "text",
+      id: "operation-special-event",
+      text: "Special event",
+    };
+  }
+
+  return null;
 }
 
 function getConfidence(score: number): string {
@@ -767,6 +800,48 @@ function getConfidence(score: number): string {
 function formatStationLine(settings: OperatorSettings): string {
   const grid = settings.homeGridValid ? settings.homeGrid.slice(0, 4) : "Not set";
   return `Location: ${grid} | HF/VHF`;
+}
+
+function formatDirectionShort(direction: string): string {
+  switch (direction.trim().toUpperCase()) {
+    case "NORTH":
+      return "N";
+    case "NORTH-EAST":
+    case "NORTHEAST":
+      return "NE";
+    case "EAST":
+      return "E";
+    case "SOUTH-EAST":
+    case "SOUTHEAST":
+      return "SE";
+    case "SOUTH":
+      return "S";
+    case "SOUTH-WEST":
+    case "SOUTHWEST":
+      return "SW";
+    case "WEST":
+      return "W";
+    case "NORTH-WEST":
+    case "NORTHWEST":
+      return "NW";
+    default:
+      return direction;
+  }
+}
+
+function formatOperatorSummary(summary: string | undefined, fallback: string): string {
+  return safeText(summary, fallback)
+    .replaceAll("North-East", "NE")
+    .replaceAll("North-West", "NW")
+    .replaceAll("South-East", "SE")
+    .replaceAll("South-West", "SW")
+    .replaceAll("Voice / phone likely good", "SSB likely good")
+    .replaceAll("Voice likely good", "SSB likely good")
+    .replaceAll("Phone likely good", "SSB likely good")
+    .replaceAll("Digital likely good", "FT8/FT4 strong")
+    .replace(/\b(N|NE|E|SE|S|SW|W|NW) \((\d{1,3})°\)/g, "$1 · $2°")
+    .replace(/\b(N|NE|E|SE|S|SW|W|NW) \((\d{1,3})Â°\)/g, "$1 · $2°")
+    .replace(/\s*,\s*/g, " · ");
 }
 
 function parseSolarNumber(value: number | string | undefined): number | null {
