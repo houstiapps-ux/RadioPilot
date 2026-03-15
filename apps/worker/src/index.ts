@@ -1,7 +1,7 @@
-import dotenv from "dotenv";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 
 import { parseDxClusterLine, type ParsedSpot } from "@radio-pilot/shared";
 import { createClient } from "redis";
@@ -11,7 +11,7 @@ import { startSnapshotLoop } from "./snapshot.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
 
 const telnetIac = 255;
 const telnetDo = 253;
@@ -26,6 +26,8 @@ const dxHost = process.env.DX_CLUSTER_HOST ?? "ei7mre.ath.cx";
 const dxPort = Number(process.env.DX_CLUSTER_PORT ?? 7300);
 const dxCallsign = process.env.DX_CLUSTER_CALLSIGN ?? "EI5JEB";
 const spotSource = process.env.SPOT_SOURCE ?? "dxheat";
+// Local development should use the public Railway Redis URL from the repo root .env.
+// Railway deployments should set REDIS_URL to the Redis private endpoint in Railway service variables.
 const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 const logLevel = process.env.LOG_LEVEL ?? "info";
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS ?? 30_000);

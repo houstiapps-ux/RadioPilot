@@ -2,6 +2,7 @@ import type { OpportunityCard, OpportunitySnapshot, ParsedSpot } from "@radio-pi
 
 const SNAPSHOT_INTERVAL_MS = 30_000;
 const RECENT_WINDOW_MS = 15 * 60 * 1000;
+const RECENT_RETENTION_MS = 60 * 60 * 1000;
 const SNAPSHOT_KEY = "snapshot:default";
 const homeContinent = process.env.HOME_CONTINENT?.trim().toUpperCase() ?? "";
 
@@ -16,6 +17,9 @@ interface BandStats {
   readonly uniqueCallsigns: number;
   readonly portableSpots: number;
   readonly offContinentSpots: number | null;
+  readonly dominantModeFamily: ModeFamilyKey;
+  readonly dominantDxContinent: string | null;
+  readonly spots: readonly StoredSpot[];
   readonly modeFamilyCounts: Readonly<Record<ModeFamilyKey, number>>;
   readonly representative: StoredSpot;
 }
@@ -24,6 +28,7 @@ type ModeFamilyKey = "cw" | "phone" | "digital" | "unknown";
 
 interface SnapshotRedisClient {
   zRangeByScore(key: string, min: number, max: number): Promise<string[]>;
+  zRemRangeByScore(key: string, min: number, max: number): Promise<number>;
   set(key: string, value: string): Promise<unknown>;
 }
 
@@ -34,11 +39,20 @@ export function startSnapshotLoop(redis: SnapshotRedisClient): void {
 async function publishSnapshot(redis: SnapshotRedisClient): Promise<void> {
   const now = Date.now();
   const minScore = now - RECENT_WINDOW_MS;
+  await pruneRecentSortedSpots(redis, now);
   const rawSpots = await redis.zRangeByScore("spots:recent", minScore, now);
   const spots = rawSpots.flatMap(parseStoredSpot);
   const snapshot = buildOpportunitySnapshot(spots, now);
 
   await redis.set(SNAPSHOT_KEY, JSON.stringify(snapshot));
+}
+
+async function pruneRecentSortedSpots(
+  redis: SnapshotRedisClient,
+  now: number,
+): Promise<void> {
+  const cutoff = now - RECENT_RETENTION_MS;
+  await redis.zRemRangeByScore("spots:recent", 0, cutoff);
 }
 
 export function buildOpportunitySnapshot(
@@ -51,8 +65,10 @@ export function buildOpportunitySnapshot(
     .sort((left, right) => compareCards(left.card, right.card));
   const rankedCards = rankedBands.map(({ card }) => card);
   const portableCards = rankedBands
-    .filter(({ stats }) => stats.portableSpots > 0)
-    .map(({ card }) => card);
+    .flatMap(({ stats }) => {
+      const representative = selectPortableRepresentativeSpot(stats.spots);
+      return representative ? [createOpportunityCard(stats, representative)] : [];
+    });
   const uniqueRankedBands = [...rankedBands].sort((left, right) => {
     if (right.stats.uniqueCallsigns !== left.stats.uniqueCallsigns) {
       return right.stats.uniqueCallsigns - left.stats.uniqueCallsigns;
@@ -63,15 +79,16 @@ export function buildOpportunitySnapshot(
   const dxRankedBands = [...rankedBands].sort((left, right) =>
     compareDxBandStats(left.stats, right.stats, left.card, right.card),
   );
+  const dxOpportunity = hasAnyContinentData(statsByBand)
+    ? createDxOpportunityCard(dxRankedBands.map(({ stats }) => stats))
+    : uniqueRankedBands[0]?.card ?? null;
 
   return {
     generatedAt: new Date(now).toISOString(),
     cards: rankedCards,
     bestOpportunity: rankedCards[0] ?? null,
     watchNext: rankedCards.slice(1, 4),
-    dxOpportunity:
-      (hasAnyContinentData(statsByBand) ? dxRankedBands[0] : uniqueRankedBands[0])?.card ??
-      null,
+    dxOpportunity,
     nearbyActivity: portableCards.slice(0, 3),
   };
 }
@@ -93,10 +110,12 @@ function buildBandStats(spots: readonly StoredSpot[]): BandStats[] {
   return [...bands.entries()].map(([bandKey, bandSpots]) => {
     const uniqueCallsigns = new Set(bandSpots.map((spot) => spot.spottedCallsign)).size;
     const portableSpots = bandSpots.filter(
-      (spot) => spot.tags.includes("SOTA") || spot.tags.includes("POTA"),
+      (spot) => isPortableSpot(spot),
     ).length;
     const offContinentSpots = countOffContinentSpots(bandSpots);
     const modeFamilyCounts = countModeFamilies(bandSpots);
+    const dominantModeFamily = getDominantModeFamily(modeFamilyCounts);
+    const dominantDxContinent = getDominantDxContinent(bandSpots);
 
     return {
       bandKey,
@@ -104,14 +123,19 @@ function buildBandStats(spots: readonly StoredSpot[]): BandStats[] {
       uniqueCallsigns,
       portableSpots,
       offContinentSpots,
+      dominantModeFamily,
+      dominantDxContinent,
+      spots: bandSpots,
       modeFamilyCounts,
       representative: selectRepresentativeSpot(bandSpots),
     };
   });
 }
 
-function createOpportunityCard(stats: BandStats): OpportunityCard {
-  const { representative } = stats;
+function createOpportunityCard(
+  stats: BandStats,
+  representative: StoredSpot = stats.representative,
+): OpportunityCard {
   const score = scoreBand(stats);
 
   return {
@@ -119,7 +143,7 @@ function createOpportunityCard(stats: BandStats): OpportunityCard {
     callsign: representative.spottedCallsign,
     band: representative.band,
     frequencyKHz: representative.frequencyKHz,
-    summary: `${stats.totalSpots} spots, ${stats.uniqueCallsigns} unique calls, ${stats.portableSpots} portable, dominant ${getDominantModeFamily(stats)} mode`,
+    summary: buildCardSummary(stats),
     tags: representative.tags,
     score,
   };
@@ -248,6 +272,15 @@ function countModeFamilies(spots: readonly StoredSpot[]): Readonly<Record<ModeFa
   return counts;
 }
 
+function isPortableSpot(spot: StoredSpot): boolean {
+  return (
+    spot.tags.includes("SOTA") ||
+    spot.tags.includes("POTA") ||
+    spot.tags.includes("WWFF") ||
+    spot.tags.includes("/P")
+  );
+}
+
 function countOffContinentSpots(spots: readonly StoredSpot[]): number | null {
   if (homeContinent.length === 0) {
     return null;
@@ -273,8 +306,36 @@ function countOffContinentSpots(spots: readonly StoredSpot[]): number | null {
   return availableCount > 0 ? offContinentCount : null;
 }
 
+function countDxContinents(spots: readonly StoredSpot[]): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+
+  for (const spot of spots) {
+    const continentDx = normalizeContinent(spot.continentDx);
+
+    if (!continentDx) {
+      continue;
+    }
+
+    counts.set(continentDx, (counts.get(continentDx) ?? 0) + 1);
+  }
+
+  return counts;
+}
+
 function hasAnyContinentData(stats: readonly BandStats[]): boolean {
   return stats.some((statsItem) => statsItem.offContinentSpots !== null);
+}
+
+function createDxOpportunityCard(statsByBand: readonly BandStats[]): OpportunityCard | null {
+  for (const stats of statsByBand) {
+    const representative = selectOffContinentRepresentativeSpot(stats.spots);
+
+    if (representative) {
+      return createOpportunityCard(stats, representative);
+    }
+  }
+
+  return statsByBand[0] ? createOpportunityCard(statsByBand[0]) : null;
 }
 
 function compareDxBandStats(
@@ -307,7 +368,7 @@ function compareDxBandStats(
   return compareCards(leftCard, rightCard);
 }
 
-function getDominantModeFamily(stats: BandStats): ModeFamilyKey {
+function getDominantModeFamily(modeFamilyCounts: Readonly<Record<ModeFamilyKey, number>>): ModeFamilyKey {
   const orderedModeFamilies: readonly ModeFamilyKey[] = [
     "digital",
     "phone",
@@ -316,12 +377,67 @@ function getDominantModeFamily(stats: BandStats): ModeFamilyKey {
   ];
 
   return orderedModeFamilies.reduce((best, current) => {
-    if (stats.modeFamilyCounts[current] > stats.modeFamilyCounts[best]) {
+    if (modeFamilyCounts[current] > modeFamilyCounts[best]) {
       return current;
     }
 
     return best;
   }, "unknown");
+}
+
+function getDominantDxContinent(spots: readonly StoredSpot[]): string | null {
+  const continentCounts = countDxContinents(spots);
+  let bestContinent: string | null = null;
+  let bestCount = -1;
+
+  for (const [continent, count] of [...continentCounts.entries()].sort((left, right) =>
+    left[0].localeCompare(right[0]),
+  )) {
+    if (count > bestCount) {
+      bestContinent = continent;
+      bestCount = count;
+    }
+  }
+
+  return bestContinent;
+}
+
+function buildCardSummary(stats: BandStats): string {
+  const summaryParts = [
+    `${stats.totalSpots} spots`,
+    `${stats.uniqueCallsigns} unique calls`,
+    `${stats.portableSpots} portable`,
+    `dominant ${stats.dominantModeFamily} mode`,
+  ];
+
+  if (stats.dominantDxContinent) {
+    summaryParts.push(`dominant DX ${stats.dominantDxContinent}`);
+  }
+
+  return summaryParts.join(", ");
+}
+
+function selectPortableRepresentativeSpot(spots: readonly StoredSpot[]): StoredSpot | null {
+  return selectPreferredRepresentativeSpot(spots, (spot) => isPortableSpot(spot));
+}
+
+function selectOffContinentRepresentativeSpot(spots: readonly StoredSpot[]): StoredSpot | null {
+  if (homeContinent.length === 0) {
+    return null;
+  }
+
+  return selectPreferredRepresentativeSpot(spots, (spot) => {
+    const continentDx = normalizeContinent(spot.continentDx);
+    return continentDx !== null && continentDx !== homeContinent;
+  });
+}
+
+function selectPreferredRepresentativeSpot(
+  spots: readonly StoredSpot[],
+  predicate: (spot: StoredSpot) => boolean,
+): StoredSpot | null {
+  const preferredSpots = spots.filter(predicate);
+  return preferredSpots.length > 0 ? selectRepresentativeSpot(preferredSpots) : null;
 }
 
 function getSpotSortTime(spot: StoredSpot): number {
