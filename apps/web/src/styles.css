@@ -534,8 +534,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 28px;
-  margin-top: 6px;
+  min-height: 26px;
   padding: 4px 10px;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -543,6 +542,22 @@ body {
   font-weight: 800;
   line-height: 1;
   letter-spacing: 0.02em;
+}
+
+.confidence-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 2px;
+  white-space: nowrap;
+}
+
+.confidence-line-label {
+  color: #17304b;
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .confidence-high {

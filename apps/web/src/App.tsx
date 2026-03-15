@@ -529,8 +529,8 @@ function ConfidenceMetaLine(props: { value: string }) {
         : "confidence-badge confidence-low";
 
   return (
-    <div className="meta-line">
-      <span className="meta-line-label">Confidence</span>
+    <div className="confidence-line">
+      <span className="confidence-line-label">Confidence:</span>
       <span className={toneClassName}>{props.value}</span>
     </div>
   );

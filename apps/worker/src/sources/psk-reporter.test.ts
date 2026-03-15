@@ -3,32 +3,30 @@ import test from "node:test";
 
 import {
   buildPskReporterSummary,
+  buildPskReporterTopics,
   parsePskReporterPayload,
 } from "./psk-reporter.js";
 
 test("normalizes generic psk reporter records", () => {
   const reports = parsePskReporterPayload({
-    reports: [
-      {
-        senderCallsign: "ea8abc",
-        receiverCallsign: "ei2test",
-        senderLocator: "IL18",
-        receiverLocator: "IO63UI",
-        frequency: "14074000",
-        mode: "ft8",
-        flowStartSeconds: "1773572100",
-      },
-    ],
+    senderCallsign: "ea8abc",
+    receiverCallsign: "ei2test",
+    senderLocator: "IL18",
+    receiverLocator: "IO63UI",
+    frequency: "14074000",
+    mode: "ft8",
+    flowStartSeconds: "1773572100",
   });
 
   assert.deepEqual(reports, [{
-    txCallsign: "EA8ABC",
-    rxCallsign: "EI2TEST",
-    txGrid: "IL18",
-    rxGrid: "IO63UI",
+    observedAt: "2026-03-15T10:55:00.000Z",
+    frequencyHz: 14074000,
     band: "20m",
     mode: "FT8",
-    observedAt: "2026-03-15T10:55:00.000Z",
+    senderCallsign: "EA8ABC",
+    senderLocator: "IL18",
+    receiverCallsign: "EI2TEST",
+    receiverLocator: "IO63UI",
   }]);
 });
 
@@ -36,39 +34,55 @@ test("builds rolling per-band counts, direction counts, and trend", () => {
   const now = Date.parse("2026-03-15T12:00:00.000Z");
   const summary = buildPskReporterSummary([
     {
-      txCallsign: "K1AAA",
-      rxCallsign: "EI2TEST",
-      txGrid: "FN31PR",
-      rxGrid: "IO63UI",
-      band: "20m",
-      mode: "FT8",
       observedAt: "2026-03-15T11:55:00.000Z",
-    },
-    {
-      txCallsign: "W1BBB",
-      rxCallsign: "EI2TEST",
-      txGrid: "FN20AB",
-      rxGrid: "IO63UI",
+      frequencyHz: 14074000,
       band: "20m",
       mode: "FT8",
+      senderCallsign: "K1AAA",
+      senderLocator: "FN31PR",
+      receiverCallsign: "EI2TEST",
+      receiverLocator: "IO63UI",
+    },
+    {
       observedAt: "2026-03-15T11:52:00.000Z",
-    },
-    {
-      txCallsign: "JA1OLD",
-      rxCallsign: "EI2TEST",
-      txGrid: "PM95TU",
-      rxGrid: "IO63UI",
+      frequencyHz: 14074000,
       band: "20m",
       mode: "FT8",
+      senderCallsign: "W1BBB",
+      senderLocator: "FN20AB",
+      receiverCallsign: "EI2TEST",
+      receiverLocator: "IO63UI",
+    },
+    {
       observedAt: "2026-03-15T11:35:00.000Z",
+      frequencyHz: 14074000,
+      band: "20m",
+      mode: "FT8",
+      senderCallsign: "JA1OLD",
+      senderLocator: "PM95TU",
+      receiverCallsign: "EI2TEST",
+      receiverLocator: "IO63UI",
     },
   ], now);
 
   assert.equal(summary.windowMinutes, 15);
   assert.equal(summary.bands.length, 1);
   assert.equal(summary.bands[0]?.band, "20m");
-  assert.equal(summary.bands[0]?.reportCount, 2);
-  assert.equal(summary.bands[0]?.previousReportCount, 1);
+  assert.equal(summary.bands[0]?.currentWindowCount, 2);
+  assert.equal(summary.bands[0]?.previousWindowCount, 1);
   assert.equal(summary.bands[0]?.trend, 1);
+  assert.equal(summary.bands[0]?.modeCounts.FT8, 2);
   assert.equal(summary.bands[0]?.directionCounts.W, 2);
+  assert.equal(summary.bands[0]?.pathCounts["NA->EU"], 2);
+  assert.equal(summary.bands[0]?.uniqueSenderLocatorCount, 2);
+  assert.equal(summary.bands[0]?.uniqueReceiverLocatorCount, 1);
+});
+
+test("builds shared MQTT topics for supported bands and modes", () => {
+  const topics = buildPskReporterTopics();
+
+  assert.ok(topics.includes("pskr/filter/v2/20m/FT8/#"));
+  assert.ok(topics.includes("pskr/filter/v2/20m/FT4/#"));
+  assert.ok(topics.includes("pskr/filter/v2/6m/FT8/#"));
+  assert.equal(topics.length, 24);
 });

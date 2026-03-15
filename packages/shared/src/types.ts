@@ -62,25 +62,31 @@ export interface ActivationRecord {
 }
 
 export interface PskReporterReport {
-  readonly txCallsign: string;
-  readonly rxCallsign: string;
-  readonly txGrid: string;
-  readonly rxGrid: string;
+  readonly observedAt: string;
+  readonly frequencyHz: number;
   readonly band: Band | null;
   readonly mode: string;
-  readonly observedAt: string;
+  readonly senderCallsign: string;
+  readonly senderLocator: string;
+  readonly receiverCallsign: string;
+  readonly receiverLocator: string;
 }
 
 export interface PskReporterBandSummary {
   readonly band: Band | null;
-  readonly reportCount: number;
-  readonly previousReportCount: number;
+  readonly currentWindowCount: number;
+  readonly previousWindowCount: number;
   readonly trend: number;
+  readonly modeCounts: Readonly<Record<string, number>>;
   readonly directionCounts: Readonly<Partial<Record<MaidenheadPathEstimate["direction"], number>>>;
+  readonly pathCounts: Readonly<Record<string, number>>;
+  readonly uniqueSenderLocatorCount: number;
+  readonly uniqueReceiverLocatorCount: number;
 }
 
 export interface PskReporterSummary {
   readonly generatedAt: string;
+  readonly freshnessTimestamp: string;
   readonly currentWindowStart: string;
   readonly previousWindowStart: string;
   readonly windowMinutes: number;

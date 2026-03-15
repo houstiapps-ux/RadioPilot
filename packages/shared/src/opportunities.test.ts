@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   buildOpportunitySnapshot,
+  buildOpportunitySnapshotWithDebug,
   parseStoredOpportunitySpot,
   type StoredOpportunitySpot,
 } from "./opportunities.js";
+import type { PskReporterSummary } from "./types.js";
 
 test("enriches opportunities with dominant direction, bearing, region, and confidence", () => {
   const now = Date.parse("2026-03-15T12:00:00.000Z");
@@ -98,6 +100,58 @@ test("uses the representative spot locator for card direction and bearing", () =
   assert.ok(snapshot.bestOpportunity.bearing <= 310);
   assert.equal(snapshot.watchNext.length, 0);
   assert.equal(snapshot.dxOpportunity?.direction, "West");
+});
+
+test("applies PSK summary boosts and exposes debug details", () => {
+  const observedAt = "2026-03-15T11:58:00.000Z";
+  const [storedSpot] = parseStoredOpportunitySpot(JSON.stringify({
+    id: "spot-psk-1",
+    source: "dxheat",
+    spotterCallsign: "EI2TEST",
+    spottedCallsign: "EA8ABC",
+    continentDx: "AF",
+    dxLocator: "IL18",
+    frequencyKHz: 14074,
+    band: "20m",
+    observedAt,
+    mode: "ft8",
+    modeFamily: "digital",
+    comment: "CQ",
+    tags: ["FT8"],
+    receivedAt: observedAt,
+  }));
+
+  const pskSummary: PskReporterSummary = {
+    generatedAt: "2026-03-15T12:00:00.000Z",
+    freshnessTimestamp: "2026-03-15T11:59:30.000Z",
+    currentWindowStart: "2026-03-15T11:45:00.000Z",
+    previousWindowStart: "2026-03-15T11:30:00.000Z",
+    windowMinutes: 15,
+    bands: [{
+      band: "20m",
+      currentWindowCount: 80,
+      previousWindowCount: 40,
+      trend: 40,
+      modeCounts: { FT8: 60, FT4: 10 },
+      directionCounts: { SW: 5 },
+      pathCounts: { AF: 1 } as never,
+      uniqueSenderLocatorCount: 10,
+      uniqueReceiverLocatorCount: 8,
+    }],
+  };
+
+  const debug = buildOpportunitySnapshotWithDebug([storedSpot], {
+    now: Date.parse("2026-03-15T12:00:00.000Z"),
+    homeGrid: "IO63UI",
+    pskSummary,
+  });
+
+  assert.ok(debug.snapshot.bestOpportunity);
+  assert.ok((debug.snapshot.bestOpportunity.score ?? 0) > 100);
+  assert.equal(debug.bands[0]?.band, "20m");
+  assert.equal(debug.bands[0]?.pskCurrent, 80);
+  assert.equal(debug.bands[0]?.pskPrevious, 40);
+  assert.equal(debug.bands[0]?.pskBoostApplied, true);
 });
 
 function createSpot(

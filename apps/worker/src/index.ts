@@ -7,11 +7,12 @@ import {
   parseDxClusterLine,
   type ActivationRecord,
   type ParsedSpot,
+  type PskReporterSummary,
   type SolarConditions,
 } from "@radio-pilot/shared";
 import { createClient } from "redis";
 import { fetchDxHeatSpots } from "./sources/dxheat.js";
-import { fetchPskReporterSummary } from "./sources/psk-reporter.js";
+import { startPskReporterMqttIngestion } from "./sources/psk-reporter.js";
 import { fetchPotaActivations } from "./sources/pota.js";
 import { fetchSolarConditions } from "./sources/solar.js";
 import { fetchSotaActivations } from "./sources/sota.js";
@@ -40,7 +41,6 @@ const spotSource = process.env.SPOT_SOURCE ?? "dxheat";
 const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 const logLevel = process.env.LOG_LEVEL ?? "info";
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS ?? 30_000);
-const pskReporterPollIntervalMs = Number(process.env.PSK_REPORTER_POLL_INTERVAL_MS ?? 5 * 60 * 1000);
 const solarPollIntervalMs = 10 * 60 * 1000;
 const activationPollIntervalMs = Number(process.env.ACTIVATION_POLL_INTERVAL_MS ?? 5 * 60 * 1000);
 const dedupeWindowMs = 15 * 60 * 1000;
@@ -279,8 +279,15 @@ function startSolarPolling(): void {
 }
 
 function startPskReporterPolling(): void {
-  console.info(`PSK Reporter polling started with interval ${pskReporterPollIntervalMs}ms`);
-  void runPskReporterPollingLoop();
+  startPskReporterMqttIngestion({
+    onSummary: async (summary) => {
+      await persistPskReporterSummary(summary);
+    },
+    onDiagnostic: (event, details) => {
+      debug(`PSK Reporter ${event} ${JSON.stringify(details)}`);
+    },
+  });
+  console.info("PSK Reporter MQTT ingestion started");
 }
 
 function startActivationPolling(): void {
@@ -347,21 +354,12 @@ async function runSolarPollingLoop(): Promise<void> {
   }
 }
 
-async function pollPskReporter(): Promise<void> {
-  const summary = await fetchPskReporterSummary();
-
-  if (!summary) {
-    return;
-  }
-
-  await redis.set("psk:summary:latest", JSON.stringify(summary));
-}
-
-async function runPskReporterPollingLoop(): Promise<void> {
-  while (true) {
-    await pollPskReporter();
-    await delay(pskReporterPollIntervalMs);
-  }
+async function persistPskReporterSummary(summary: PskReporterSummary): Promise<void> {
+  await Promise.all([
+    redis.set("psk:summary", JSON.stringify(summary)),
+    redis.set("psk:summary:latest", JSON.stringify(summary)),
+    redis.set("psk:freshness", summary.freshnessTimestamp),
+  ]);
 }
 
 async function pollActivations(): Promise<void> {

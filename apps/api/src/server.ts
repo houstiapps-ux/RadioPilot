@@ -5,8 +5,10 @@ import Fastify from "fastify";
 
 import {
   buildOpportunitySnapshot,
+  buildOpportunitySnapshotWithDebug,
   parseMaidenheadLocator,
   parseStoredOpportunitySpot,
+  type PskReporterSummary,
   type SolarConditions,
   type OpportunitySnapshot,
 } from "@radio-pilot/shared";
@@ -82,9 +84,25 @@ app.get("/debug/snapshot", async (request) => {
   return buildPersonalizedSnapshot(request.query, "debug");
 });
 
+app.get("/debug/opportunities", async (request) => {
+  return buildPersonalizedSnapshotDebug(request.query);
+});
+
 app.get("/debug/solar", async () => {
   const rawSolar = await redis.get("solar:latest");
   return parseSolar(rawSolar);
+});
+
+app.get("/debug/psk", async () => {
+  const [rawSummary, freshness] = await Promise.all([
+    redis.get("psk:summary"),
+    redis.get("psk:freshness"),
+  ]);
+
+  return {
+    summary: parseJson(rawSummary ?? ""),
+    freshness,
+  };
 });
 
 await app.listen({ port, host });
@@ -131,6 +149,19 @@ function parseSolar(value: string | null): SolarConditions | null {
   return null;
 }
 
+function parsePskSummary(value: string | null): PskReporterSummary | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as PskReporterSummary;
+    return Array.isArray(parsed.bands) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function getHomeGridFromQuery(query: unknown): string | undefined {
   if (!query || typeof query !== "object") {
     return undefined;
@@ -173,15 +204,24 @@ async function buildPersonalizedSnapshot(
   query: unknown,
   source: "api" | "debug",
 ): Promise<OpportunitySnapshot> {
+  return (await buildPersonalizedSnapshotDebug(query, source)).snapshot;
+}
+
+async function buildPersonalizedSnapshotDebug(
+  query: unknown,
+  source: "api" | "debug-opportunities" | "debug" = "debug-opportunities",
+): Promise<ReturnType<typeof buildOpportunitySnapshotWithDebug>> {
   const homeGrid = getHomeGridFromQuery(query);
   const operatingStyle = getOperatingStyleFromQuery(query);
   const now = Date.now();
-  const [rawSpots, rawSolar] = await Promise.all([
+  const [rawSpots, rawSolar, rawPsk] = await Promise.all([
     redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
     redis.get("solar:latest"),
+    redis.get("psk:summary"),
   ]);
   const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
   const solar = parseSolar(rawSolar);
+  const pskSummary = parsePskSummary(rawPsk);
   const spotsWithDxLocator = spots.filter((spot) => typeof spot.dxLocator === "string").length;
 
   // Temporary request-time trace to verify that homeGrid personalization is actually being applied.
@@ -196,16 +236,35 @@ async function buildPersonalizedSnapshot(
   );
 
   if (spots.length === 0) {
-    return {
+    const empty = {
       ...emptySnapshot(),
       solar,
     };
+
+    return { snapshot: empty, bands: [] };
   }
 
-  return {
-    ...buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle }),
+  const built = buildOpportunitySnapshotWithDebug(spots, {
+    now,
+    homeGrid,
+    operatingStyle,
+    pskSummary: isFreshPskSummary(pskSummary, now) ? pskSummary : null,
+  });
+  const snapshot = {
+    ...built.snapshot,
     solar,
   };
+
+  return { ...built, snapshot };
+}
+
+function isFreshPskSummary(summary: PskReporterSummary | null, now: number): boolean {
+  if (!summary) {
+    return false;
+  }
+
+  const freshness = Date.parse(summary.freshnessTimestamp);
+  return Number.isFinite(freshness) && freshness >= now - RECENT_WINDOW_MS * 2;
 }
 
 function renderIndexPage(): string {

@@ -3,7 +3,12 @@ import {
   estimatePathBetweenLocators,
   parseMaidenheadLocator,
 } from "./maidenhead.js";
-import type { OpportunityCard, OpportunitySnapshot, ParsedSpot } from "./types.js";
+import type {
+  OpportunityCard,
+  OpportunitySnapshot,
+  ParsedSpot,
+  PskReporterSummary,
+} from "./types.js";
 
 const RECENT_WINDOW_MS = 15 * 60 * 1000;
 
@@ -11,6 +16,7 @@ interface BuildOpportunitySnapshotOptions {
   readonly now?: number;
   readonly homeGrid?: string;
   readonly operatingStyle?: string;
+  readonly pskSummary?: PskReporterSummary | null;
 }
 
 export interface StoredOpportunitySpot extends ParsedSpot {
@@ -35,9 +41,26 @@ interface BandStats {
   readonly dominantModeFamily: ModeFamilyKey;
   readonly dominantDxContinent: string | null;
   readonly confidence: "Low" | "Medium" | "High";
+  readonly pskCurrent: number;
+  readonly pskPrevious: number;
+  readonly pskTrendRising: boolean;
+  readonly pskBandBoostApplied: boolean;
+  readonly pskModeBoostApplied: boolean;
   readonly spots: readonly StoredOpportunitySpot[];
   readonly modeFamilyCounts: Readonly<Record<ModeFamilyKey, number>>;
   readonly representative: StoredOpportunitySpot;
+}
+
+export interface OpportunityDebugBand {
+  readonly band: string;
+  readonly pskCurrent: number;
+  readonly pskPrevious: number;
+  readonly pskBoostApplied: boolean;
+}
+
+export interface OpportunityDebugSnapshot {
+  readonly snapshot: OpportunitySnapshot;
+  readonly bands: readonly OpportunityDebugBand[];
 }
 
 type ModeFamilyKey = "cw" | "phone" | "digital" | "unknown";
@@ -51,6 +74,13 @@ export function buildOpportunitySnapshot(
   allSpots: readonly StoredOpportunitySpot[],
   options: BuildOpportunitySnapshotOptions = {},
 ): OpportunitySnapshot {
+  return buildOpportunitySnapshotWithDebug(allSpots, options).snapshot;
+}
+
+export function buildOpportunitySnapshotWithDebug(
+  allSpots: readonly StoredOpportunitySpot[],
+  options: BuildOpportunitySnapshotOptions = {},
+): OpportunityDebugSnapshot {
   const now = options.now ?? Date.now();
   const currentWindowStart = now - RECENT_WINDOW_MS;
   const previousWindowStart = now - RECENT_WINDOW_MS * 2;
@@ -59,6 +89,7 @@ export function buildOpportunitySnapshot(
     ? deriveContinentFromMaidenhead(normalizedHomeGrid)
     : undefined;
   const normalizedOperatingStyle = normalizeOperatingStyle(options.operatingStyle);
+  const pskByBand = indexPskSummaryByBand(options.pskSummary);
   const currentSpots = allSpots.filter((spot) => {
     const spotTime = getSpotSortTime(spot);
     return spotTime >= currentWindowStart && spotTime <= now;
@@ -72,6 +103,7 @@ export function buildOpportunitySnapshot(
     previousSpots,
     normalizedHomeContinent ?? null,
     normalizedHomeGrid,
+    pskByBand,
   );
   const rankedBands = statsByBand
     .map((stats) => ({ stats, card: createOpportunityCard(stats, stats.representative, normalizedHomeGrid) }))
@@ -110,7 +142,7 @@ export function buildOpportunitySnapshot(
     )
     : watchNextBands[0]?.card ?? null;
 
-  return {
+  const snapshot = {
     generatedAt: new Date(now).toISOString(),
     cards: rankedCards,
     bestOpportunity: rankedCards[0] ?? null,
@@ -120,6 +152,16 @@ export function buildOpportunitySnapshot(
       .map(({ card }) => card),
     dxOpportunity,
     nearbyActivity: portableCards.slice(0, 3),
+  };
+
+  return {
+    snapshot,
+    bands: statsByBand.map((stats) => ({
+      band: stats.bandKey,
+      pskCurrent: stats.pskCurrent,
+      pskPrevious: stats.pskPrevious,
+      pskBoostApplied: stats.pskBandBoostApplied || stats.pskModeBoostApplied,
+    })),
   };
 }
 
@@ -175,6 +217,7 @@ function buildBandStats(
   previousSpots: readonly StoredOpportunitySpot[],
   homeContinent: string | null,
   homeGrid: string | undefined,
+  pskByBand: ReadonlyMap<string, PskBandSummary>,
 ): BandStats[] {
   const bands = new Map<string, StoredOpportunitySpot[]>();
   const previousCounts = new Map<string, number>();
@@ -206,6 +249,7 @@ function buildBandStats(
     const modeFamilyCounts = countModeFamilies(bandSpots);
     const dominantModeFamily = getDominantModeFamily(modeFamilyCounts);
     const dominantDxContinent = getDominantDxContinent(bandSpots);
+    const pskBand = pskByBand.get(bandKey) ?? emptyPskBandSummary();
     const roughRegionLabel = getRoughRegionLabel(
       dominantDxContinent,
       directionalCluster.dominantDirection,
@@ -235,6 +279,14 @@ function buildBandStats(
       dominantModeFamily,
       dominantDxContinent,
       confidence,
+      pskCurrent: pskBand.current,
+      pskPrevious: pskBand.previous,
+      pskTrendRising: pskBand.rising,
+      pskBandBoostApplied: pskBand.current > 50,
+      pskModeBoostApplied: shouldApplyPskModeBoost(
+        pskBand.modeCounts,
+        dominantModeFamily,
+      ),
       spots: bandSpots,
       modeFamilyCounts,
       representative: selectRepresentativeSpot(bandSpots),
@@ -314,11 +366,19 @@ function compareWatchNextBandStats(
   rightCard: OpportunityCard,
   operatingStyle: "dx" | undefined,
 ): number {
-  const leftIncreasing = left.activityTrend > 0 ? 1 : 0;
-  const rightIncreasing = right.activityTrend > 0 ? 1 : 0;
+  const leftIncreasing = left.activityTrend > 0 || left.pskTrendRising ? 1 : 0;
+  const rightIncreasing = right.activityTrend > 0 || right.pskTrendRising ? 1 : 0;
 
   if (rightIncreasing !== leftIncreasing) {
     return rightIncreasing - leftIncreasing;
+  }
+
+  if (right.pskTrendRising !== left.pskTrendRising) {
+    return Number(right.pskTrendRising) - Number(left.pskTrendRising);
+  }
+
+  if (right.pskCurrent !== left.pskCurrent) {
+    return right.pskCurrent - left.pskCurrent;
   }
 
   if (right.activityTrend !== left.activityTrend) {
@@ -785,6 +845,7 @@ function scoreCard(
   score += stats.dominantDirectionUniqueCallsigns * 20;
   score += Math.max(stats.directionSpread, 0) * 15;
   score += countActiveModeFamilies(stats.modeFamilyCounts) * 12;
+  score += getPskScoreBoost(stats);
 
   if (operatingStyle === "dx") {
     if (stats.offContinentSpots !== null) {
@@ -794,6 +855,24 @@ function scoreCard(
     if (stats.maxDistanceKm !== null) {
       score += Math.round(stats.maxDistanceKm / 250);
     }
+  }
+
+  return score;
+}
+
+function getPskScoreBoost(stats: BandStats): number {
+  let score = 0;
+
+  if (stats.pskBandBoostApplied) {
+    score += 18;
+  }
+
+  if (stats.pskTrendRising) {
+    score += 12;
+  }
+
+  if (stats.pskModeBoostApplied) {
+    score += 8;
   }
 
   return score;
@@ -932,4 +1011,56 @@ function formatModeFamily(modeFamily: ModeFamilyKey): string {
   }
 
   return "Mixed modes";
+}
+
+interface PskBandSummary {
+  readonly current: number;
+  readonly previous: number;
+  readonly rising: boolean;
+  readonly modeCounts: Readonly<Record<string, number>>;
+}
+
+function indexPskSummaryByBand(
+  summary: PskReporterSummary | null | undefined,
+): ReadonlyMap<string, PskBandSummary> {
+  const map = new Map<string, PskBandSummary>();
+
+  if (!summary) {
+    return map;
+  }
+
+  for (const band of summary.bands) {
+    const bandKey = band.band ?? "unknown";
+    map.set(bandKey, {
+      current: band.currentWindowCount,
+      previous: band.previousWindowCount,
+      rising: band.previousWindowCount > 0
+        ? band.currentWindowCount > band.previousWindowCount * 1.2
+        : band.currentWindowCount >= 10,
+      modeCounts: band.modeCounts,
+    });
+  }
+
+  return map;
+}
+
+function emptyPskBandSummary(): PskBandSummary {
+  return {
+    current: 0,
+    previous: 0,
+    rising: false,
+    modeCounts: {},
+  };
+}
+
+function shouldApplyPskModeBoost(
+  modeCounts: Readonly<Record<string, number>>,
+  dominantModeFamily: ModeFamilyKey,
+): boolean {
+  if (dominantModeFamily !== "digital") {
+    return false;
+  }
+
+  const digitalCount = (modeCounts.FT8 ?? 0) + (modeCounts.FT4 ?? 0) + (modeCounts.DIGITAL ?? 0);
+  return digitalCount >= 20;
 }
