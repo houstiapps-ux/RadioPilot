@@ -7,7 +7,8 @@
     "api": "pnpm --filter @radio-pilot/api start",
     "worker": "pnpm --filter @radio-pilot/worker start",
     "web": "pnpm --filter @radio-pilot/web dev",
-    "snapshot:opportunities": "pnpm --filter @radio-pilot/api exec tsx src/scripts/snapshot-opportunities.ts"
+    "snapshot:opportunities": "pnpm --filter @radio-pilot/api exec tsx src/scripts/snapshot-opportunities.ts",
+    "replay:snapshot": "pnpm --filter @radio-pilot/api exec tsx src/scripts/replay-opportunity-snapshot.ts"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
