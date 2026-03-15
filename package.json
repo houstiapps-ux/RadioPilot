@@ -6,7 +6,8 @@
   "scripts": {
     "api": "pnpm --filter @radio-pilot/api start",
     "worker": "pnpm --filter @radio-pilot/worker start",
-    "web": "pnpm --filter @radio-pilot/web dev"
+    "web": "pnpm --filter @radio-pilot/web dev",
+    "snapshot:opportunities": "pnpm --filter @radio-pilot/api exec tsx src/scripts/snapshot-opportunities.ts"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
