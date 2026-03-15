@@ -12,6 +12,7 @@ type DxHeatRecord = {
   readonly Nr?: string | number;
   readonly DXCall?: string;
   readonly Spotter?: string;
+  readonly Flag?: string;
   readonly Frequency?: string;
   readonly Date?: string;
   readonly Time?: string;
@@ -69,6 +70,7 @@ export function parseDxHeatRecord(record: DxHeatRecord): ParsedSpot | null {
     source: "dxheat",
     spotterCallsign,
     spottedCallsign,
+    countryCode: normalizeCountryCode(record.Flag),
     frequencyKHz,
     frequencyHz,
     band: lookupBand(frequencyKHz),
@@ -145,6 +147,15 @@ function parseFrequencyHz(frequencyText: string): number | null {
   }
 
   return Math.round(frequencyKHz * 1000);
+}
+
+function normalizeCountryCode(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeMode(

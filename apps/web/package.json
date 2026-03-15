@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json && vite build"
   },
   "dependencies": {
+    "@radio-pilot/shared": "workspace:*",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

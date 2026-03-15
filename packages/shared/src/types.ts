@@ -11,6 +11,8 @@ export interface ParsedSpot {
   readonly spotterCallsign: string;
   readonly spottedCallsign: string;
   readonly continentDx?: string;
+  readonly countryCode?: string;
+  readonly dxLocator?: string;
   readonly frequencyKHz: number;
   readonly frequencyHz?: number;
   readonly band: Band | null;
@@ -27,6 +29,11 @@ export interface OpportunityCard {
   readonly band: Band | null;
   readonly frequencyKHz: number;
   readonly summary: string;
+  readonly countryCode?: string;
+  readonly direction?: string;
+  readonly bearing?: number;
+  readonly region?: string;
+  readonly confidence?: "Low" | "Medium" | "High";
   readonly tags: readonly SpotTag[];
   readonly score: number;
 }

@@ -1,5 +1,9 @@
-import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  buildOpportunityRequestQuery,
+  loadOperatorSettings,
+  saveHomeGrid,
+} from "./settings";
 
 type OpportunityCard = {
   id: string;
@@ -7,8 +11,13 @@ type OpportunityCard = {
   band: string | null;
   frequencyKHz: number;
   summary: string;
+  countryCode?: string;
   tags: readonly string[];
   score: number;
+  direction?: string;
+  bearing?: number;
+  region?: string;
+  confidence?: "Low" | "Medium" | "High";
 };
 
 type OpportunitySnapshot = {
@@ -20,11 +29,24 @@ type OpportunitySnapshot = {
   nearbyActivity: readonly OpportunityCard[];
 };
 
+type SolarData = {
+  sfi: string;
+  kp: string;
+  muf: string;
+};
+
 type LoadState = "loading" | "success" | "error";
+type PanelTone = "best" | "watch" | "dx" | "nearby";
 
 const opportunitiesUrl = "http://localhost:3000/api/opportunities";
-const pollIntervalMs = 30_000;
+const solarUrl = "https://www.hamqsl.com/solarxml.php";
+const opportunityPollIntervalMs = 30_000;
+const solarPollIntervalMs = 10 * 60 * 1000;
 const portableTags = new Set(["SOTA", "POTA", "WWFF", "/P"]);
+const modeTags = new Set(["CW", "SSB", "FT8", "FT4"]);
+const countryDisplayNames = typeof Intl.DisplayNames === "function"
+  ? new Intl.DisplayNames(["en"], { type: "region" })
+  : null;
 const frequencyFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
@@ -33,6 +55,10 @@ const frequencyFormatter = new Intl.NumberFormat("en-US", {
 export function App() {
   const [snapshot, setSnapshot] = useState<OpportunitySnapshot | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [settings, setSettings] = useState(loadOperatorSettings);
+  const [solarData, setSolarData] = useState<SolarData | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +66,11 @@ export function App() {
 
     async function load() {
       try {
-        const response = await fetch(opportunitiesUrl);
+        const query = buildOpportunityRequestQuery(settings);
+        const requestUrl = query.size > 0
+          ? `${opportunitiesUrl}?${query.toString()}`
+          : opportunitiesUrl;
+        const response = await fetch(requestUrl);
 
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
@@ -62,7 +92,46 @@ export function App() {
     void load();
     intervalId = window.setInterval(() => {
       void load();
-    }, pollIntervalMs);
+    }, opportunityPollIntervalMs);
+
+    return () => {
+      cancelled = true;
+
+      if (intervalId !== undefined) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [settings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId: number | undefined;
+
+    async function loadSolarData() {
+      try {
+        const response = await fetch(solarUrl);
+
+        if (!response.ok) {
+          throw new Error(`Solar request failed with status ${response.status}`);
+        }
+
+        const xml = await response.text();
+        const parsed = parseSolarData(xml);
+
+        if (!cancelled) {
+          setSolarData(parsed);
+        }
+      } catch {
+        if (!cancelled) {
+          setSolarData(null);
+        }
+      }
+    }
+
+    void loadSolarData();
+    intervalId = window.setInterval(() => {
+      void loadSolarData();
+    }, solarPollIntervalMs);
 
     return () => {
       cancelled = true;
@@ -73,175 +142,410 @@ export function App() {
     };
   }, []);
 
+  const stationLine = useMemo(() => formatStationLine(settings), [settings]);
+
   return (
-    <main className="dashboard">
-      <header className="hero">
-        <div className="hero-copy">
-          <p className="eyebrow">Radio Pilot</p>
-          <h1>What should I work right now?</h1>
-          <p className="subtitle">Live guidance for the strongest opportunities from your location.</p>
+    <main className="dashboard-shell">
+      <header className="dashboard-header">
+        <div>
+          <p className="brand-mark">Radio Pilot</p>
+          <h1>Radio Pilot</h1>
         </div>
-        <div className="hero-meta">
-          <StatusBadge state={loadState} />
-          <div className="updated-at">
-            <span className="meta-label">Last updated</span>
-            <span className="meta-value">{formatLastUpdated(snapshot?.generatedAt)}</span>
-          </div>
-        </div>
+        <button
+          type="button"
+          className="settings-toggle"
+          aria-label="Open station settings"
+          onClick={() => {
+            setSettingsOpen((current) => !current);
+            window.setTimeout(() => {
+              settingsInputRef.current?.focus();
+            }, 0);
+          }}
+        >
+          <span aria-hidden="true">⚙</span>
+        </button>
       </header>
 
-      <div className="dashboard-grid">
-        <SectionCard title="Best Opportunity" featured>
-          <OpportunityDetails
-            card={snapshot?.bestOpportunity ?? null}
-            emptyMessage="No clear top recommendation yet."
-            featured
-          />
-        </SectionCard>
+      <section className="top-strip">
+        <div className="station-bar">
+          <div>
+            <span className="strip-label">Station</span>
+            <div className="station-line">{stationLine}</div>
+          </div>
+          <StatusPill state={loadState} />
+        </div>
 
-        <SectionCard title="Watch Next">
-          <OpportunityList
-            cards={snapshot?.watchNext ?? []}
-            emptyMessage="Nothing building behind the lead band right now."
-          />
-        </SectionCard>
+        <div className="solar-card">
+          <span className="strip-label">Solar</span>
+          <div className="solar-metrics">
+            <SolarMetric label="SFI" value={solarData?.sfi ?? "—"} />
+            <SolarMetric label="Kp" value={solarData?.kp ?? "—"} />
+            <SolarMetric label="MUF" value={solarData?.muf ?? "—"} />
+          </div>
+        </div>
+      </section>
 
-        <SectionCard title="DX Opportunity">
-          <OpportunityDetails
-            card={snapshot?.dxOpportunity ?? null}
-            emptyMessage="No DX lead is standing out yet."
-          />
-        </SectionCard>
+      {settingsOpen ? (
+        <SettingsPanel
+          homeGrid={settings.homeGrid}
+          homeContinent={settings.homeContinent}
+          homeLatitude={settings.homeLatitude}
+          homeLongitude={settings.homeLongitude}
+          homeGridValid={settings.homeGridValid}
+          inputRef={settingsInputRef}
+          onHomeGridChange={(value) => {
+            setSettings(saveHomeGrid(value));
+          }}
+        />
+      ) : null}
 
-        <SectionCard title="Nearby Activity">
-          <OpportunityList
-            cards={snapshot?.nearbyActivity ?? []}
-            emptyMessage="No portable activity is standing out nearby."
-            emphasizePortableTags
-          />
-        </SectionCard>
-      </div>
+      <div className="timestamp-row">Last updated: {formatLastUpdated(snapshot?.generatedAt)}</div>
+
+      <section className="panel-grid">
+        <OpportunityPanel
+          title="Best Opportunity"
+          tone="best"
+          item={snapshot?.bestOpportunity ?? null}
+          emptyMessage="No clear top recommendation right now."
+          featured
+        />
+
+        <OpportunityPanel
+          title="Watch Next"
+          tone="watch"
+          items={snapshot?.watchNext ?? []}
+          emptyMessage="No follow-on band is building yet."
+        />
+
+        <OpportunityPanel
+          title="DX Opportunity"
+          tone="dx"
+          item={snapshot?.dxOpportunity ?? null}
+          emptyMessage="No standout DX target at the moment."
+        />
+
+        <OpportunityPanel
+          title="Nearby Activity"
+          tone="nearby"
+          items={snapshot?.nearbyActivity ?? []}
+          emptyMessage="No portable activity is standing out nearby."
+        />
+      </section>
     </main>
   );
 }
 
-function StatusBadge(props: { state: LoadState }) {
-  const toneClass =
+function SettingsPanel(props: {
+  homeGrid: string;
+  homeContinent?: string;
+  homeLatitude?: number;
+  homeLongitude?: number;
+  homeGridValid: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onHomeGridChange: (value: string) => void;
+}) {
+  const showValidation = props.homeGrid.length > 0 && !props.homeGridValid;
+  const showSummary = props.homeGridValid;
+
+  return (
+    <section className="settings-panel">
+      <label className="settings-field">
+        <span className="strip-label">Home grid</span>
+        <input
+          ref={props.inputRef}
+          className="settings-input"
+          type="text"
+          inputMode="text"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="IO63UI"
+          value={props.homeGrid}
+          onChange={(event) => {
+            props.onHomeGridChange(event.target.value);
+          }}
+        />
+      </label>
+
+      {showValidation ? (
+        <div className="settings-validation">
+          Enter a valid Maidenhead locator, for example `IO63UI`.
+        </div>
+      ) : null}
+
+      {showSummary ? (
+        <div className="settings-summary">
+          <div className="summary-block">
+            <span className="strip-label">Derived home continent</span>
+            <div className="summary-value">
+              {props.homeContinent ? props.homeContinent : "Unavailable"}
+            </div>
+          </div>
+          <div className="summary-block">
+            <span className="strip-label">Approximate lat/lon</span>
+            <div className="summary-value">
+              {formatCoordinatePair(props.homeLatitude, props.homeLongitude)}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function StatusPill(props: { state: LoadState }) {
+  const className =
     props.state === "success"
-      ? "status-badge status-live"
+      ? "status-pill status-ok"
       : props.state === "error"
-        ? "status-badge status-error"
-        : "status-badge status-loading";
+        ? "status-pill status-bad"
+        : "status-pill status-wait";
   const label =
     props.state === "success"
       ? "Live data loaded"
       : props.state === "error"
         ? "Connection issue"
-        : "Loading data";
+        : "Loading";
 
+  return <div className={className}>{label}</div>;
+}
+
+function SolarMetric(props: { label: string; value: string }) {
   return (
-    <div className={toneClass}>
-      <span className="status-dot" />
-      <span>{label}</span>
+    <div className="solar-metric">
+      <span className="solar-label">{props.label}</span>
+      <span className="solar-value">{props.value}</span>
     </div>
   );
 }
 
-function SectionCard(props: {
+function OpportunityPanel(props: {
   title: string;
-  children: ReactNode;
+  tone: PanelTone;
+  item?: OpportunityCard | null;
+  items?: readonly OpportunityCard[];
+  emptyMessage: string;
   featured?: boolean;
 }) {
+  const cards = props.item ? [props.item] : props.items ?? [];
+
   return (
-    <section className={props.featured ? "section-card section-card-featured" : "section-card"}>
-      <div className="section-head">
-        <h2>{props.title}</h2>
-      </div>
-      {props.children}
+    <section className={`opportunity-panel tone-${props.tone} ${props.featured ? "panel-featured" : ""}`}>
+      <div className="panel-title">{props.title}</div>
+      {cards.length === 0 ? (
+        <div className="panel-empty">{props.emptyMessage}</div>
+      ) : (
+        <div className="panel-items">
+          {cards.map((card) => (
+            <OperatorCard
+              key={card.id}
+              card={card}
+              tone={props.tone}
+              featured={props.featured}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
-function OpportunityDetails(props: {
-  card: OpportunityCard | null;
-  emptyMessage: string;
+function OperatorCard(props: {
+  card: OpportunityCard;
+  tone: PanelTone;
   featured?: boolean;
-  emphasizePortableTags?: boolean;
 }) {
-  if (!props.card) {
-    return <EmptyState message={props.emptyMessage} />;
-  }
+  const view = toOperatorView(props.card, props.tone);
 
   return (
-    <article className={props.featured ? "opportunity opportunity-featured" : "opportunity"}>
-      <div className="opportunity-topline">
+    <article className={`operator-card ${props.featured ? "operator-card-featured" : ""}`}>
+      <div className="operator-row">
         <div>
-          <div className="band-pill">{safeText(props.card.band, "Unknown band")}</div>
-          <div className="callsign">{safeText(props.card.callsign, "Unknown callsign")}</div>
+          <div className="operator-band">{view.band}</div>
+          <div className="operator-target">{view.primaryLine}</div>
         </div>
-        <div className="frequency">{formatFrequency(props.card.frequencyKHz)}</div>
+        <div className="operator-frequency">{formatFrequency(props.card.frequencyKHz)}</div>
       </div>
-      <p className="summary">{safeText(props.card.summary, "No summary available.")}</p>
-      <TagList tags={props.card.tags} emphasizePortableTags={props.emphasizePortableTags} />
+
+      <div className="operator-meta-grid">
+        <MetaLine label="Country" value={view.country} />
+        <MetaLine label="Direction" value={view.directionLine} />
+        <MetaLine label="Beam" value={view.beamHeading} />
+        <MetaLine label="Modes" value={view.suggestedModes} />
+        <MetaLine label="Confidence" value={view.confidence} />
+      </div>
+
+      <p className="operator-reason">{view.reasonSummary}</p>
+
+      <div className="tag-strip">
+        {view.tagItems.length > 0 ? (
+          view.tagItems.map((tag) => (
+            <span
+              key={tag}
+              className={portableTags.has(tag) ? "tag-chip tag-chip-portable" : "tag-chip"}
+            >
+              {tag}
+            </span>
+          ))
+        ) : (
+          <span className="tag-chip tag-chip-muted">None</span>
+        )}
+      </div>
     </article>
   );
 }
 
-function OpportunityList(props: {
-  cards: readonly OpportunityCard[];
-  emptyMessage: string;
-  emphasizePortableTags?: boolean;
-}) {
-  if (props.cards.length === 0) {
-    return <EmptyState message={props.emptyMessage} />;
-  }
-
+function MetaLine(props: { label: string; value: string }) {
   return (
-    <div className="opportunity-list">
-      {props.cards.map((card) => (
-        <OpportunityDetails
-          key={card.id}
-          card={card}
-          emptyMessage={props.emptyMessage}
-          emphasizePortableTags={props.emphasizePortableTags}
-        />
-      ))}
+    <div className="meta-line">
+      <span className="meta-line-label">{props.label}</span>
+      <span className="meta-line-value">{props.value}</span>
     </div>
   );
 }
 
-function TagList(props: {
-  tags: readonly string[];
-  emphasizePortableTags?: boolean;
-}) {
-  if (props.tags.length === 0) {
-    return (
-      <div className="tag-row">
-        <span className="tag-empty">None</span>
-      </div>
-    );
+function toOperatorView(card: OpportunityCard, tone: PanelTone): {
+  band: string;
+  primaryLine: string;
+  country: string;
+  directionLine: string;
+  beamHeading: string;
+  suggestedModes: string;
+  confidence: string;
+  reasonSummary: string;
+  tagItems: readonly string[];
+} {
+  const direction = extractDirection(card.summary);
+  const heading = direction ? `${direction.degrees}°` : "—";
+  const suggestedModes = getSuggestedModes(card);
+  const confidence = getConfidence(card.score);
+
+  if (tone === "watch") {
+    return {
+      band: safeText(card.band, "Unknown band"),
+      primaryLine: direction ? `Toward ${direction.label}` : safeText(card.callsign, "Activity rising"),
+      country: formatCountry(card.countryCode),
+      directionLine: direction ? direction.label : "Trend building",
+      beamHeading: heading,
+      suggestedModes,
+      confidence,
+      reasonSummary: safeText(card.summary, "Activity is rising."),
+      tagItems: card.tags,
+    };
   }
 
-  return (
-    <div className="tag-row">
-      {props.tags.map((tag) => {
-        const portableClass =
-          props.emphasizePortableTags && portableTags.has(tag)
-            ? "tag tag-portable"
-            : "tag";
+  if (tone === "dx") {
+    return {
+      band: safeText(card.band, "Unknown band"),
+      primaryLine: safeText(card.callsign, "DX target"),
+      country: formatCountry(card.countryCode),
+      directionLine: direction ? direction.label : "Direction unavailable",
+      beamHeading: heading,
+      suggestedModes,
+      confidence,
+      reasonSummary: safeText(card.summary, "Distant DX is showing."),
+      tagItems: card.tags,
+    };
+  }
 
-        return (
-          <span key={tag} className={portableClass}>
-            {tag}
-          </span>
-        );
-      })}
-    </div>
-  );
+  if (tone === "nearby") {
+    return {
+      band: safeText(card.band, "Unknown band"),
+      primaryLine: safeText(card.callsign, "Portable activity"),
+      country: formatCountry(card.countryCode),
+      directionLine: direction ? direction.label : "Nearby path unavailable",
+      beamHeading: heading,
+      suggestedModes,
+      confidence,
+      reasonSummary: safeText(card.summary, "Portable activity is active."),
+      tagItems: card.tags,
+    };
+  }
+
+  return {
+    band: safeText(card.band, "Unknown band"),
+    primaryLine: direction ? `${direction.label} (${heading})` : safeText(card.callsign, "Best path"),
+    country: formatCountry(card.countryCode),
+    directionLine: direction ? direction.label : "Direction unavailable",
+    beamHeading: heading,
+    suggestedModes,
+    confidence,
+    reasonSummary: safeText(card.summary, "Best current opening."),
+    tagItems: card.tags,
+  };
 }
 
-function EmptyState(props: { message: string }) {
-  return <div className="empty-state">{props.message}</div>;
+function getSuggestedModes(card: OpportunityCard): string {
+  const modes = card.tags.filter((tag) => modeTags.has(tag));
+
+  if (modes.length > 0) {
+    return modes.join(" / ");
+  }
+
+  const summary = card.summary.toUpperCase();
+
+  if (summary.includes("DIGITAL")) {
+    return "Digital likely";
+  }
+
+  if (summary.includes("PHONE")) {
+    return "Voice likely";
+  }
+
+  if (summary.includes("CW")) {
+    return "CW likely";
+  }
+
+  return "Mixed modes";
+}
+
+function getConfidence(score: number): string {
+  if (score >= 400) {
+    return "High";
+  }
+
+  if (score >= 200) {
+    return "Medium";
+  }
+
+  return "Low";
+}
+
+function extractDirection(summary: string): { label: string; degrees: number } | null {
+  const match = summary.match(/\b(N|NE|E|SE|S|SW|W|NW)\b/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const direction = match[1].toUpperCase() as keyof typeof directionMap;
+  return directionMap[direction];
+}
+
+function formatStationLine(settings: ReturnType<typeof loadOperatorSettings>): string {
+  const grid = settings.homeGridValid ? settings.homeGrid.slice(0, 4) : "Not set";
+  return `Location: ${grid} | HF/VHF`;
+}
+
+function parseSolarData(xml: string): SolarData {
+  const document = new DOMParser().parseFromString(xml, "text/xml");
+
+  return {
+    sfi: readSolarValue(document, ["solarflux", "solarfluxindex", "sfi"]),
+    kp: readSolarValue(document, ["kindex", "kp"]),
+    muf: readSolarValue(document, ["muf"]),
+  };
+}
+
+function readSolarValue(document: Document, tags: readonly string[]): string {
+  for (const tag of tags) {
+    const value = document.querySelector(tag)?.textContent?.trim();
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return "—";
 }
 
 function formatFrequency(value: number): string {
@@ -265,6 +569,17 @@ function formatLastUpdated(value: string | undefined): string {
   }).format(date);
 }
 
+function formatCoordinatePair(
+  latitude: number | undefined,
+  longitude: number | undefined,
+): string {
+  if (typeof latitude !== "number" || typeof longitude !== "number") {
+    return "Unavailable";
+  }
+
+  return `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
+}
+
 function safeText(value: string | null | undefined, fallback: string): string {
   if (typeof value !== "string") {
     return fallback;
@@ -273,3 +588,27 @@ function safeText(value: string | null | undefined, fallback: string): string {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : fallback;
 }
+
+function formatCountry(countryCode: string | undefined): string {
+  if (!countryCode) {
+    return "—";
+  }
+
+  try {
+    const label = countryDisplayNames?.of(countryCode.toUpperCase());
+    return label && label.trim().length > 0 ? label : countryCode.toUpperCase();
+  } catch {
+    return countryCode.toUpperCase();
+  }
+}
+
+const directionMap = {
+  N: { label: "North", degrees: 0 },
+  NE: { label: "North-East", degrees: 45 },
+  E: { label: "East", degrees: 90 },
+  SE: { label: "South-East", degrees: 135 },
+  S: { label: "South", degrees: 180 },
+  SW: { label: "South-West", degrees: 225 },
+  W: { label: "West", degrees: 270 },
+  NW: { label: "North-West", degrees: 315 },
+} as const;

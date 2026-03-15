@@ -3,7 +3,12 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import Fastify from "fastify";
 
-import type { OpportunitySnapshot } from "@radio-pilot/shared";
+import {
+  buildOpportunitySnapshot,
+  parseMaidenheadLocator,
+  parseStoredOpportunitySpot,
+  type OpportunitySnapshot,
+} from "@radio-pilot/shared";
 import { createClient } from "redis";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,6 +16,7 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
 
+const RECENT_WINDOW_MS = 15 * 60 * 1000;
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "0.0.0.0";
 // Local development should use the public Railway Redis URL from the repo root .env.
@@ -61,9 +67,16 @@ app.get("/health", async () => {
   };
 });
 
-app.get("/api/opportunities", async () => {
-  const rawSnapshot = await redis.get("snapshot:default");
-  return parseSnapshot(rawSnapshot) ?? emptySnapshot();
+app.get("/api/opportunities", async (request) => {
+  const homeGrid = getHomeGridFromQuery(request.query);
+  const operatingStyle = getOperatingStyleFromQuery(request.query);
+  const now = Date.now();
+  const rawSpots = await redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now);
+  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
+
+  return spots.length > 0
+    ? buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle })
+    : emptySnapshot();
 });
 
 app.get("/debug/recent-spots", async () => {
@@ -88,6 +101,36 @@ function parseSnapshot(value: string | null): OpportunitySnapshot | null {
   } catch {
     return null;
   }
+}
+
+function getHomeGridFromQuery(query: unknown): string | undefined {
+  if (!query || typeof query !== "object") {
+    return undefined;
+  }
+
+  const homeGrid = Reflect.get(query, "homeGrid");
+
+  if (typeof homeGrid !== "string") {
+    return undefined;
+  }
+
+  const normalized = homeGrid.trim().toUpperCase();
+  return parseMaidenheadLocator(normalized) ? normalized : undefined;
+}
+
+function getOperatingStyleFromQuery(query: unknown): string | undefined {
+  if (!query || typeof query !== "object") {
+    return undefined;
+  }
+
+  const operatingStyle = Reflect.get(query, "operatingStyle");
+
+  if (typeof operatingStyle !== "string") {
+    return undefined;
+  }
+
+  const normalized = operatingStyle.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function parseJson(value: string): unknown | null {

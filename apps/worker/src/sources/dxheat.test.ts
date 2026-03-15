@@ -8,6 +8,7 @@ test("maps a DXHeat JSON record into a parsed spot", () => {
     Nr: 12,
     DXCall: "EA8/AB1C/P",
     Spotter: "EI4ABC",
+    Flag: "cy",
     Frequency: "14074.5",
     Date: "15/03/26",
     Time: "09:12",
@@ -20,6 +21,7 @@ test("maps a DXHeat JSON record into a parsed spot", () => {
   assert.equal(parsed.spottedCallsign, "EA8/AB1C/P");
   assert.equal(parsed.id, "12");
   assert.equal(parsed.source, "dxheat");
+  assert.equal(parsed.countryCode, "CY");
   assert.equal(parsed.frequencyHz, 14074500);
   assert.equal(parsed.frequencyKHz, 14074.5);
   assert.equal(parsed.band, "20m");
