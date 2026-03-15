@@ -27,6 +27,8 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
 
 const RECENT_WINDOW_MS = 15 * 60 * 1000;
+const FILTER_CACHE_REFRESH_MS = 5_000;
+const FILTER_CACHE_MAX_STALE_MS = 30_000;
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "0.0.0.0";
 // Local development should use the public Railway Redis URL from the repo root .env.
@@ -35,6 +37,28 @@ const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
 const app = Fastify({ logger: false });
 const redis = createClient({ url: redisUrl });
+
+interface CachedOpportunityInputs {
+  readonly now: number;
+  readonly rawSpots: readonly string[];
+  readonly spots: ReturnType<typeof parseStoredOpportunitySpot>[number][];
+  readonly solar: SolarConditions | null;
+  readonly pskSummary: PskReporterSummary | null;
+  readonly pskTrends: PskBandTrendMap;
+  readonly bandPredictions: Awaited<ReturnType<typeof predictBandOpenings>>;
+  readonly propagationDensity: Awaited<ReturnType<typeof getDirectionalPropagation>>;
+  readonly dxRarity: Awaited<ReturnType<typeof loadDxRarityContext>>;
+  readonly dxEvents: Awaited<ReturnType<typeof detectDxEvents>>;
+  readonly bandResolution: ReturnType<typeof summarizeStoredSpotBandResolution>;
+}
+
+let cachedOpportunityInputs:
+  | {
+      readonly expiresAt: number;
+      readonly value: CachedOpportunityInputs;
+    }
+  | null = null;
+let cachedOpportunityInputsPending: Promise<CachedOpportunityInputs> | null = null;
 
 const emptySnapshot = (): OpportunitySnapshot => ({
   generatedAt: new Date(0).toISOString(),
@@ -445,35 +469,20 @@ async function buildPersonalizedSnapshotDebug(
   const chasing = getChasingFromQuery(query);
   const modeFilter = getModeFilterFromQuery(query);
   const bandScope = getBandScopeFromQuery(query);
-  const now = Date.now();
-  const [rawSpots, rawSolar, rawPsk, pskTrends, bandPredictions, propagationDensity] = await Promise.all([
-    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
-    redis.get("solar:latest"),
-    redis.get("psk:summary"),
-    getAllBandTrends(redis),
-    predictBandOpenings(redis, { homeGrid }),
-    getDirectionalPropagation(redis, { homeGrid }),
-  ]);
-  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
-  const dxRarity = await loadDxRarityContext(redis, spots, now);
-  const dxEvents = await detectDxEvents(spots, redis, now);
-  const solar = parseSolar(rawSolar);
-  const pskSummary = parsePskSummary(rawPsk);
-  const spotsWithDxLocator = spots.filter((spot) => typeof spot.dxLocator === "string").length;
-
-  // Temporary request-time trace to verify that homeGrid personalization is actually being applied.
-  console.info(
-    `[${source}] opportunities personalization`,
-    JSON.stringify({
-      homeGrid: homeGrid ?? null,
-      operatingStyle: operatingStyle ?? null,
-      chasing: chasing ?? null,
-      modeFilter: modeFilter ?? null,
-      bandScope: bandScope ?? null,
-      spotCount: spots.length,
-      spotsWithDxLocator,
-    }),
-  );
+  const baseInputs = await getCachedOpportunityInputs();
+  const {
+    now,
+    rawSpots,
+    spots,
+    solar,
+    pskSummary,
+    pskTrends,
+    bandPredictions,
+    propagationDensity,
+    dxRarity,
+    dxEvents,
+    bandResolution,
+  } = baseInputs;
 
   if (spots.length === 0) {
     const empty = {
@@ -485,11 +494,7 @@ async function buildPersonalizedSnapshotDebug(
       snapshot: empty,
       bands: [],
       dxCandidates: [],
-      bandResolution: {
-        sourceBandMissing: 0,
-        frequencyDerivedBandUsed: 0,
-        unresolvedBand: 0,
-      },
+      bandResolution,
     };
   }
 
@@ -512,9 +517,85 @@ async function buildPersonalizedSnapshotDebug(
     ...built.snapshot,
     solar,
   };
-  const bandResolution = summarizeStoredSpotBandResolution(rawSpots);
 
   return { ...built, snapshot, bandResolution };
+}
+
+async function getCachedOpportunityInputs(): Promise<CachedOpportunityInputs> {
+  const now = Date.now();
+
+  if (cachedOpportunityInputs) {
+    const cacheAgeMs = now - cachedOpportunityInputs.value.now;
+
+    if (cacheAgeMs <= FILTER_CACHE_REFRESH_MS) {
+      return cachedOpportunityInputs.value;
+    }
+
+    if (cacheAgeMs <= FILTER_CACHE_MAX_STALE_MS) {
+      triggerOpportunityInputsRefresh(now);
+      return cachedOpportunityInputs.value;
+    }
+  }
+
+  if (cachedOpportunityInputsPending) {
+    return cachedOpportunityInputsPending;
+  }
+
+  triggerOpportunityInputsRefresh(now);
+
+  try {
+    return await cachedOpportunityInputsPending!;
+  } finally {
+    cachedOpportunityInputsPending = null;
+  }
+}
+
+function triggerOpportunityInputsRefresh(now: number): void {
+  if (cachedOpportunityInputsPending) {
+    return;
+  }
+
+  cachedOpportunityInputsPending = loadOpportunityInputs(now)
+    .then((value) => {
+      cachedOpportunityInputs = {
+        value,
+        expiresAt: value.now + FILTER_CACHE_MAX_STALE_MS,
+      };
+      return value;
+    })
+    .finally(() => {
+      cachedOpportunityInputsPending = null;
+    });
+}
+
+async function loadOpportunityInputs(now: number): Promise<CachedOpportunityInputs> {
+  const [rawSpots, rawSolar, rawPsk, pskTrends, bandPredictions, propagationDensity] = await Promise.all([
+    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
+    redis.get("solar:latest"),
+    redis.get("psk:summary"),
+    getAllBandTrends(redis),
+    predictBandOpenings(redis, {}),
+    getDirectionalPropagation(redis, {}),
+  ]);
+  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
+  const dxRarity = await loadDxRarityContext(redis, spots, now);
+  const dxEvents = await detectDxEvents(spots, redis, now, { rarity: dxRarity });
+  const solar = parseSolar(rawSolar);
+  const pskSummary = parsePskSummary(rawPsk);
+
+  return {
+    now,
+    rawSpots,
+    spots,
+    solar,
+    pskSummary,
+    pskTrends,
+    bandPredictions,
+    propagationDensity,
+    dxRarity,
+    dxEvents,
+    bandResolution: summarizeStoredSpotBandResolution(rawSpots),
+  };
 }
 
 function getChasingFromQuery(

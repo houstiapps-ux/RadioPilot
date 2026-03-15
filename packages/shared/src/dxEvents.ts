@@ -37,16 +37,21 @@ interface DxEventScoreContext {
   readonly now: number;
 }
 
+interface DetectDxEventsOptions {
+  readonly rarity?: DxRarityContext | null;
+}
+
 export async function detectDxEvents(
   spots: readonly ParsedSpot[],
   redisClient: DxEventRedisClient,
   now = Date.now(),
+  options: DetectDxEventsOptions = {},
 ): Promise<readonly DxEventCandidate[]> {
   if (spots.length === 0) {
     return [];
   }
 
-  const rarity = await loadDxRarityContext(redisClient, spots, now);
+  const rarity = options.rarity ?? await loadDxRarityContext(redisClient, spots, now);
   const context: DxEventScoreContext = { rarity, now };
 
   return buildDxEventGroups(spots, now)
