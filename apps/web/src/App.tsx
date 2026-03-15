@@ -22,6 +22,7 @@ type OpportunityCard = {
   beamHeading?: number;
   region?: string;
   confidence?: "Low" | "Medium" | "High";
+  activityLevel?: "High" | "Moderate" | "Low";
   confidenceReason?: string;
   bandState?: "Opening" | "Stable" | "Fading";
   trendLabel?: "Rising" | "Steady" | "Falling";
@@ -701,11 +702,11 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   );
 
   if (tone === "watch") {
-    return {
-      band: safeText(card.band, "Unknown band"),
-      primaryLine: callsign,
-      country: formatCountry(card.countryCode),
-      directionLine: card.direction ? directionLine : "Trend building",
+  return {
+    band: formatBandStateLabel(card),
+    primaryLine: callsign,
+    country: formatCountry(card.countryCode),
+    directionLine: card.direction ? directionLine : "Trend building",
       beamHeading: conciseBeamHeading,
       confidence,
       reasonSummary: formatOperatorSummary(card.summary, "Activity rising."),
@@ -715,7 +716,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
 
   if (tone === "dx") {
     return {
-      band: safeText(card.band, "Unknown band"),
+      band: formatBandStateLabel(card),
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine,
@@ -728,7 +729,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
 
   if (tone === "nearby") {
     return {
-      band: safeText(card.band, "Unknown band"),
+      band: formatBandStateLabel(card),
       primaryLine: callsign,
       country: formatCountry(card.countryCode),
       directionLine: card.direction ? directionLine : "Nearby path unavailable",
@@ -740,7 +741,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   }
 
   return {
-    band: safeText(card.band, "Unknown band"),
+    band: formatBandStateLabel(card),
     primaryLine: callsign,
     country: formatCountry(card.countryCode),
     directionLine,
@@ -749,6 +750,25 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
     reasonSummary: formatOperatorSummary(card.summary, "Best current opening."),
     tagItems: card.tags,
   };
+}
+
+function formatBandStateLabel(card: OpportunityCard): string {
+  const band = safeText(card.band, "Unknown band");
+  const bandState = getBandStateLabel(card);
+
+  return bandState ? `${band} • ${bandState}` : band;
+}
+
+function getBandStateLabel(card: OpportunityCard): string | null {
+  if (card.activityLevel === "High" && card.bandState === "Opening") {
+    return "Strong now";
+  }
+
+  if (card.bandState === "Opening" || card.bandState === "Stable" || card.bandState === "Fading") {
+    return card.bandState;
+  }
+
+  return null;
 }
 
 function getModeIndicators(card: OpportunityCard): readonly IconIndicator[] {
