@@ -164,10 +164,11 @@ type DevReviewData = {
 type LoadState = "loading" | "success" | "error";
 type PanelTone = "best" | "watch" | "dx" | "nearby";
 
-const opportunitiesUrl = "http://localhost:3000/api/opportunities";
-const debugOpportunitiesUrl = "http://localhost:3000/debug/opportunities";
-const debugBandsUrl = "http://localhost:3000/debug/bands";
-const debugPropagationUrl = "http://localhost:3000/debug/propagation";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const opportunitiesUrl = `${API_BASE_URL}/api/opportunities`;
+const debugOpportunitiesUrl = `${API_BASE_URL}/debug/opportunities`;
+const debugBandsUrl = `${API_BASE_URL}/debug/bands`;
+const debugPropagationUrl = `${API_BASE_URL}/debug/propagation`;
 const opportunityPollIntervalMs = 30_000;
 const portableTags = new Set(["SOTA", "POTA", "WWFF", "/P"]);
 const modeTags = new Set(["CW", "SSB", "FT8", "FT4"]);
