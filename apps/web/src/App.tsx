@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+
 import {
   buildOpportunityRequestQuery,
   loadOperatorSettings,
   saveHomeGrid,
+  type OperatorSettings,
 } from "./settings";
 
 type OpportunityCard = {
@@ -32,6 +34,7 @@ type OpportunitySnapshot = {
 type SolarData = {
   sfi: string;
   kp: string;
+  aIndex: string;
   muf: string;
 };
 
@@ -64,7 +67,7 @@ export function App() {
     let cancelled = false;
     let intervalId: number | undefined;
 
-    async function load() {
+    async function loadSnapshot() {
       try {
         const query = buildOpportunityRequestQuery(settings);
         const requestUrl = query.size > 0
@@ -89,14 +92,13 @@ export function App() {
       }
     }
 
-    void load();
+    void loadSnapshot();
     intervalId = window.setInterval(() => {
-      void load();
+      void loadSnapshot();
     }, opportunityPollIntervalMs);
 
     return () => {
       cancelled = true;
-
       if (intervalId !== undefined) {
         window.clearInterval(intervalId);
       }
@@ -135,7 +137,6 @@ export function App() {
 
     return () => {
       cancelled = true;
-
       if (intervalId !== undefined) {
         window.clearInterval(intervalId);
       }
@@ -176,12 +177,7 @@ export function App() {
         </div>
 
         <div className="solar-card">
-          <span className="strip-label">Solar</span>
-          <div className="solar-metrics">
-            <SolarMetric label="SFI" value={solarData?.sfi ?? "—"} />
-            <SolarMetric label="Kp" value={solarData?.kp ?? "—"} />
-            <SolarMetric label="MUF" value={solarData?.muf ?? "—"} />
-          </div>
+          <SolarPanel data={solarData} />
         </div>
       </section>
 
@@ -202,34 +198,38 @@ export function App() {
       <div className="timestamp-row">Last updated: {formatLastUpdated(snapshot?.generatedAt)}</div>
 
       <section className="panel-grid">
-        <OpportunityPanel
-          title="Best Opportunity"
-          tone="best"
-          item={snapshot?.bestOpportunity ?? null}
-          emptyMessage="No clear top recommendation right now."
-          featured
-        />
+        <div className="panel-column">
+          <OpportunityPanel
+            title="Best Opportunity"
+            tone="best"
+            item={snapshot?.bestOpportunity ?? null}
+            emptyMessage="No clear top recommendation right now."
+            featured
+          />
 
-        <OpportunityPanel
-          title="Watch Next"
-          tone="watch"
-          items={snapshot?.watchNext ?? []}
-          emptyMessage="No follow-on band is building yet."
-        />
+          <OpportunityPanel
+            title="DX Opportunity"
+            tone="dx"
+            item={snapshot?.dxOpportunity ?? null}
+            emptyMessage="No standout DX target at the moment."
+          />
+        </div>
 
-        <OpportunityPanel
-          title="DX Opportunity"
-          tone="dx"
-          item={snapshot?.dxOpportunity ?? null}
-          emptyMessage="No standout DX target at the moment."
-        />
+        <div className="panel-column">
+          <OpportunityPanel
+            title="Watch Next"
+            tone="watch"
+            items={snapshot?.watchNext ?? []}
+            emptyMessage="No follow-on band is building yet."
+          />
 
-        <OpportunityPanel
-          title="Nearby Activity"
-          tone="nearby"
-          items={snapshot?.nearbyActivity ?? []}
-          emptyMessage="No portable activity is standing out nearby."
-        />
+          <OpportunityPanel
+            title="Nearby Activity"
+            tone="nearby"
+            items={snapshot?.nearbyActivity ?? []}
+            emptyMessage="No portable activity is standing out nearby."
+          />
+        </div>
       </section>
     </main>
   );
@@ -309,11 +309,123 @@ function StatusPill(props: { state: LoadState }) {
   return <div className={className}>{label}</div>;
 }
 
-function SolarMetric(props: { label: string; value: string }) {
+function SolarPanel(props: { data: SolarData | null }) {
   return (
-    <div className="solar-metric">
-      <span className="solar-label">{props.label}</span>
-      <span className="solar-value">{props.value}</span>
+    <>
+      <div className="solar-card-header">
+        <div>
+          <span className="strip-label">Solar</span>
+          <div className="solar-title">Propagation instruments</div>
+        </div>
+        <div className="solar-status">
+          {props.data ? "Live solar data" : "Calm placeholder"}
+        </div>
+      </div>
+
+      <div className="solar-panel">
+        <GaugeMetric
+          label="SFI"
+          value={props.data?.sfi}
+          min={60}
+          max={220}
+          bands={[
+            { stop: 0.28, className: "gauge-band-weak" },
+            { stop: 0.62, className: "gauge-band-fair" },
+            { stop: 1, className: "gauge-band-strong" },
+          ]}
+          rangeLabel="Weak to strong"
+          idleLabel="No flux data"
+        />
+
+        <GaugeMetric
+          label="Kp"
+          value={props.data?.kp}
+          min={0}
+          max={9}
+          bands={[
+            { stop: 0.34, className: "gauge-band-quiet" },
+            { stop: 0.67, className: "gauge-band-restless" },
+            { stop: 1, className: "gauge-band-disturbed" },
+          ]}
+          rangeLabel="Quiet to disturbed"
+          idleLabel="No Kp data"
+        />
+
+        <SolarReading
+          label="A-index"
+          value={props.data?.aIndex ?? "No data"}
+          hint={props.data ? "Geomagnetic background" : "Awaiting feed"}
+        />
+
+        <SolarReading
+          label="MUF"
+          value={props.data?.muf ?? "No data"}
+          hint={props.data ? "Estimated upper usable freq" : "Awaiting feed"}
+        />
+      </div>
+    </>
+  );
+}
+
+function GaugeMetric(props: {
+  label: string;
+  value: string | undefined;
+  min: number;
+  max: number;
+  bands: readonly { stop: number; className: string }[];
+  rangeLabel: string;
+  idleLabel: string;
+}) {
+  const numericValue = parseSolarNumber(props.value);
+  const hasValue = numericValue !== null;
+  const ratio = hasValue
+    ? clamp((numericValue - props.min) / (props.max - props.min), 0, 1)
+    : 0;
+  const angle = -120 + ratio * 240;
+
+  return (
+    <div className={`solar-gauge ${hasValue ? "" : "solar-gauge-idle"}`}>
+      <div className="solar-gauge-head">
+        <span className="solar-gauge-label">{props.label}</span>
+        <span className="solar-gauge-scale">{props.rangeLabel}</span>
+      </div>
+
+      <svg className="solar-gauge-svg" viewBox="0 0 160 112" aria-hidden="true">
+        {props.bands.map((band, index) => {
+          const startRatio = index === 0 ? 0 : props.bands[index - 1]?.stop ?? 0;
+          return (
+            <path
+              key={`${props.label}-${band.className}`}
+              className={`solar-gauge-arc ${band.className}`}
+              d={describeArcSegment(80, 86, 50, -120 + startRatio * 240, -120 + band.stop * 240)}
+            />
+          );
+        })}
+        <g
+          className="solar-gauge-pointer"
+          style={{ transform: `rotate(${angle}deg)` }}
+        >
+          <line x1="80" y1="86" x2="80" y2="36" />
+        </g>
+        <circle className="solar-gauge-cap" cx="80" cy="86" r="4.5" />
+      </svg>
+
+      <div className="solar-gauge-value">
+        {hasValue ? formatSolarNumber(numericValue) : "No data"}
+      </div>
+      <div className="solar-gauge-status">
+        {hasValue ? props.rangeLabel : props.idleLabel}
+      </div>
+    </div>
+  );
+}
+
+function SolarReading(props: { label: string; value: string; hint: string }) {
+  return (
+    <div className="solar-reading">
+      <span className="solar-reading-label">{props.label}</span>
+      <span className="solar-reading-value">{props.value}</span>
+      <span className="solar-reading-hint">{props.hint}</span>
     </div>
   );
 }
@@ -415,7 +527,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   tagItems: readonly string[];
 } {
   const direction = extractDirection(card.summary);
-  const heading = direction ? `${direction.degrees}°` : "—";
+  const heading = direction ? `${direction.degrees}°` : "Unavailable";
   const suggestedModes = getSuggestedModes(card);
   const confidence = getConfidence(card.score);
 
@@ -521,7 +633,7 @@ function extractDirection(summary: string): { label: string; degrees: number } |
   return directionMap[direction];
 }
 
-function formatStationLine(settings: ReturnType<typeof loadOperatorSettings>): string {
+function formatStationLine(settings: OperatorSettings): string {
   const grid = settings.homeGridValid ? settings.homeGrid.slice(0, 4) : "Not set";
   return `Location: ${grid} | HF/VHF`;
 }
@@ -532,6 +644,7 @@ function parseSolarData(xml: string): SolarData {
   return {
     sfi: readSolarValue(document, ["solarflux", "solarfluxindex", "sfi"]),
     kp: readSolarValue(document, ["kindex", "kp"]),
+    aIndex: readSolarValue(document, ["aindex", "a-index", "aindexindex"]),
     muf: readSolarValue(document, ["muf"]),
   };
 }
@@ -539,13 +652,55 @@ function parseSolarData(xml: string): SolarData {
 function readSolarValue(document: Document, tags: readonly string[]): string {
   for (const tag of tags) {
     const value = document.querySelector(tag)?.textContent?.trim();
-
     if (value) {
       return value;
     }
   }
 
-  return "—";
+  return "No data";
+}
+
+function parseSolarNumber(value: string | undefined): number | null {
+  if (!value || value === "No data") {
+    return null;
+  }
+
+  const numericValue = Number.parseFloat(value.replace(",", "."));
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function formatSolarNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function polarToCartesian(
+  centerX: number,
+  centerY: number,
+  radius: number,
+  angleDegrees: number,
+): { x: number; y: number } {
+  const angleRadians = ((angleDegrees - 90) * Math.PI) / 180;
+  return {
+    x: centerX + radius * Math.cos(angleRadians),
+    y: centerY + radius * Math.sin(angleRadians),
+  };
+}
+
+function describeArcSegment(
+  centerX: number,
+  centerY: number,
+  radius: number,
+  startAngle: number,
+  endAngle: number,
+): string {
+  const start = polarToCartesian(centerX, centerY, radius, endAngle);
+  const end = polarToCartesian(centerX, centerY, radius, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
 }
 
 function formatFrequency(value: number): string {
@@ -591,7 +746,7 @@ function safeText(value: string | null | undefined, fallback: string): string {
 
 function formatCountry(countryCode: string | undefined): string {
   if (!countryCode) {
-    return "—";
+    return "Unavailable";
   }
 
   try {

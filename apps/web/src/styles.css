@@ -67,6 +67,7 @@ body {
   display: grid;
   gap: 12px;
   margin-top: 14px;
+  align-items: start;
 }
 
 .station-bar,
@@ -74,8 +75,13 @@ body {
 .settings-panel,
 .opportunity-panel {
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.84);
   box-shadow: 0 12px 28px rgba(35, 66, 102, 0.1);
+}
+
+.station-bar,
+.settings-panel,
+.opportunity-panel {
+  background: rgba(255, 255, 255, 0.84);
 }
 
 .station-bar {
@@ -125,34 +131,179 @@ body {
 }
 
 .solar-card {
-  padding: 14px 16px;
+  padding: 14px 16px 16px;
+  background:
+    linear-gradient(180deg, rgba(12, 32, 52, 0.94), rgba(27, 53, 79, 0.94)),
+    linear-gradient(135deg, rgba(91, 152, 216, 0.08), rgba(255, 255, 255, 0.02));
+  color: #edf6ff;
+  border: 1px solid rgba(148, 190, 229, 0.18);
 }
 
-.solar-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 10px;
+.solar-card .strip-label {
+  color: #93b0c9;
 }
 
-.solar-metric {
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #f6fbff, #ebf3fb);
+.solar-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.solar-label {
-  display: block;
-  color: #5c7892;
-  font-size: 0.78rem;
+.solar-title {
+  margin-top: 4px;
+  font-size: 1rem;
   font-weight: 700;
+  color: #f3f8fc;
 }
 
-.solar-value {
-  display: block;
-  margin-top: 6px;
-  font-size: 1.2rem;
+.solar-status {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(154, 193, 228, 0.14);
+  color: #c7dbef;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.solar-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.solar-gauge,
+.solar-reading {
+  min-width: 0;
+  border-radius: 16px;
+  background: rgba(235, 245, 255, 0.06);
+  border: 1px solid rgba(163, 197, 228, 0.12);
+}
+
+.solar-gauge {
+  padding: 12px 12px 10px;
+}
+
+.solar-gauge-idle {
+  background: rgba(210, 225, 238, 0.05);
+}
+
+.solar-gauge-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.solar-gauge-label {
+  color: #f4f9ff;
+  font-size: 0.84rem;
   font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.solar-gauge-scale {
+  color: #9ab7d1;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.solar-gauge-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 4px;
+}
+
+.solar-gauge-arc {
+  fill: none;
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+
+.gauge-band-weak {
+  stroke: #7f8f9f;
+}
+
+.gauge-band-fair {
+  stroke: #d6c25e;
+}
+
+.gauge-band-strong {
+  stroke: #5fd092;
+}
+
+.gauge-band-quiet {
+  stroke: #59c980;
+}
+
+.gauge-band-restless {
+  stroke: #e0be58;
+}
+
+.gauge-band-disturbed {
+  stroke: #ef8b53;
+}
+
+.solar-gauge-pointer {
+  transform-origin: 80px 86px;
+}
+
+.solar-gauge-pointer line {
+  stroke: #f4fbff;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.solar-gauge-cap {
+  fill: #f4fbff;
+}
+
+.solar-gauge-value {
+  margin-top: -4px;
+  font-size: 1.16rem;
+  font-weight: 800;
+  color: #f5fbff;
+}
+
+.solar-gauge-status {
+  margin-top: 4px;
+  color: #a7c2da;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.solar-reading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px;
+}
+
+.solar-reading-label {
+  color: #9db8d0;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.solar-reading-value {
+  margin-top: 8px;
+  font-size: 1.28rem;
+  font-weight: 800;
+  color: #f5fbff;
+}
+
+.solar-reading-hint {
+  margin-top: 6px;
+  color: #aac2d9;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .settings-panel {
@@ -214,9 +365,15 @@ body {
 
 .panel-grid {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   margin-top: 14px;
   align-items: start;
+}
+
+.panel-column {
+  display: grid;
+  gap: 12px;
+  align-content: start;
 }
 
 .opportunity-panel {
@@ -370,10 +527,15 @@ body {
 
 @media (min-width: 760px) {
   .top-strip {
-    grid-template-columns: 1.2fr .9fr;
+    grid-template-columns: 1.1fr 1fr;
+  }
+
+  .solar-panel {
+    grid-template-columns: 1.15fr 1.15fr 0.9fr 0.9fr;
   }
 
   .panel-grid {
-    grid-template-columns: 1.1fr .9fr;
+    grid-template-columns: 1.1fr 0.9fr;
+    align-items: start;
   }
 }
