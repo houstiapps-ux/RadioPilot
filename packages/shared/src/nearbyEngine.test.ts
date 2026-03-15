@@ -19,8 +19,28 @@ test("prefers nearby portable opportunities and exposes distance", () => {
   assert.equal(result.cards.length, 1);
   assert.equal(result.cards[0]?.callsign, "EI7ABC/P");
   assert.equal(result.cards[0]?.portableType, "SOTA");
+  assert.equal(result.cards[0]?.entity, "Ireland");
   assert.ok(typeof result.cards[0]?.distanceKm === "number");
   assert.equal(result.candidates[0]?.callsign, "EI7ABC/P");
+});
+
+test("detects portable context from callsign suffixes and comment text", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const result = findNearbyOpportunities(
+    { homeGrid: "IO63UI" },
+    [
+      createSpot("EI7MOB/M", "IO63VG", "40m", "2026-03-15T11:59:10.000Z", ["FT8"], "portable"),
+      createSpot("EI7PARK", "IO63VG", "40m", "2026-03-15T11:59:05.000Z", ["FT8"], "POTA activation"),
+      createSpot("EI7SUM", "IO63VG", "40m", "2026-03-15T11:59:00.000Z", ["FT8"], "SOTA summit"),
+    ],
+    undefined,
+    now,
+  );
+
+  const portableTypes = result.candidates.map((candidate) => candidate.portableType);
+  assert.ok(portableTypes.includes("Portable"));
+  assert.ok(portableTypes.includes("POTA"));
+  assert.ok(portableTypes.includes("SOTA"));
 });
 
 function createSpot(

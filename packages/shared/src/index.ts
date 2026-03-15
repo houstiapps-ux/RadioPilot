@@ -6,6 +6,7 @@ export * from "./dxRarity.js";
 export * from "./geo.js";
 export * from "./maidenhead.js";
 export * from "./nearbyEngine.js";
+export * from "./normalizationAudit.js";
 export * from "./opportunityEngine.js";
 export * from "./opportunities.js";
 export * from "./pathDensity.js";
