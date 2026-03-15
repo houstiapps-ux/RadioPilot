@@ -28,6 +28,11 @@ const FILTER_CACHE_REFRESH_MS = 5_000;
 const FILTER_CACHE_MAX_STALE_MS = 30_000;
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "0.0.0.0";
+
+if (process.env.NODE_ENV === "production" && !process.env.REDIS_URL) {
+  throw new Error("REDIS_URL is not configured for production");
+}
+
 const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 
 const app = Fastify({ logger: false });
@@ -55,6 +60,7 @@ const emptySnapshot = (): OpportunitySnapshot => ({
   solar: null,
 });
 
+console.log("Redis URL source:", process.env.REDIS_URL ? "env REDIS_URL" : "localhost fallback");
 await redis.connect();
 
 app.addHook("onRequest", async (request, reply) => {
