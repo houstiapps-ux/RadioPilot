@@ -10,6 +10,7 @@ import {
   estimatePathBetweenLocators,
   parseMaidenheadLocator,
 } from "./maidenhead.js";
+import { calculatePathStability } from "./pathStability.js";
 import type {
   BandPredictionMap,
   OpportunityCard,
@@ -491,8 +492,20 @@ function createOpportunityCard(
   const activityLevel = getActivityLevel(stats);
   const bandState = getBandState(stats);
   const portableType = getPortableType(representative.tags);
+  const confidenceExplanation = buildConfidenceExplanation(stats, solar);
   const signals = buildSignals(stats, representative, modeSummary, portableType);
   const why = buildWhy(stats, representative, solar, modeSummary, portableType);
+  const pathStability = calculatePathStability({
+    pskCurrent: stats.pskCurrent,
+    pskPrevious: stats.pskPrevious,
+    directionConfidence: stats.propagationDirectionConfidence,
+    directionSpread: stats.directionSpread,
+    currentCallsignSpots: stats.spots.filter((spot) =>
+      normalizeCallsign(spot.spottedCallsign) === normalizeCallsign(representative.spottedCallsign)
+    ).length,
+    totalSpots: stats.totalSpots,
+    freshnessSeconds,
+  });
 
   return {
     id: `${stats.bandKey}:${representative.spottedCallsign}`,
@@ -507,10 +520,14 @@ function createOpportunityCard(
     bearing: pathEstimate ? pathEstimate.bearingDegrees : undefined,
     beamHeading: pathEstimate ? pathEstimate.bearingDegrees : stats.propagationBeamHeading ?? undefined,
     directionConfidence: stats.propagationDirectionConfidence,
+    pathStability: pathStability?.pathStability,
+    pathStabilityScore: pathStability?.pathStabilityScore,
     strongestPropagationSignal: stats.propagationSignals[0],
     region: stats.roughRegionLabel ?? undefined,
-    confidence: stats.confidence,
-    confidenceReason: getConfidenceReason(stats, solar),
+    confidence: confidenceExplanation.confidence,
+    confidenceReason: confidenceExplanation.confidenceReason,
+    evidenceFlags: confidenceExplanation.evidenceFlags,
+    supportChips: confidenceExplanation.supportChips,
     activityLevel,
     bandState,
     freshnessSeconds,
@@ -1280,6 +1297,69 @@ function getConfidenceReason(
   return "Fresh spots but limited PSK support";
 }
 
+function buildConfidenceExplanation(
+  stats: BandStats,
+  solar: SolarConditions | null,
+): {
+  confidence: "Low" | "Medium" | "High";
+  confidenceReason: string;
+  evidenceFlags: {
+    cluster: boolean;
+    psk: boolean;
+    solar: boolean;
+  };
+  supportChips: readonly string[];
+} {
+  const muf = getSolarMuf(solar);
+  const clusterStrong = stats.totalSpots >= 10 || stats.uniqueCallsigns >= 7;
+  const clusterPresent = stats.totalSpots >= 4 || stats.uniqueCallsigns >= 4;
+  const pskStrong = stats.pskCurrent >= 20;
+  const pskPresent = stats.pskCurrent > 0;
+  const solarSupported = muf !== null && bandLooksSupportedByMuf(stats.bandKey, muf);
+  const directionConfidence = stats.propagationDirectionConfidence;
+  const directionStrong = directionConfidence === "High";
+  const confidence = stats.confidence;
+
+  let confidenceReason = "Limited evidence so far";
+
+  if (clusterStrong && pskStrong && directionStrong) {
+    confidenceReason = "Cluster and PSK agree";
+  } else if (confidence === "High" && clusterPresent && pskPresent) {
+    confidenceReason = "Cluster and PSK align";
+  } else if (pskPresent && !clusterStrong) {
+    confidenceReason = "Path confirmed, but activity still light";
+  } else if (confidence !== "Low" && clusterPresent && solarSupported && !pskPresent) {
+    confidenceReason = "Fresh opening with moderate support";
+  } else if (confidence !== "Low" && clusterPresent) {
+    confidenceReason = "Activity good, path less certain";
+  }
+
+  return {
+    confidence,
+    confidenceReason,
+    evidenceFlags: {
+      cluster: clusterPresent,
+      psk: pskPresent,
+      solar: solarSupported,
+    },
+    supportChips: [formatPathSupportChip(directionConfidence)],
+  };
+}
+
+function formatPathSupportChip(
+  directionConfidence: "High" | "Medium" | "Low",
+): string {
+  if (directionConfidence === "High") {
+    return "Path strong";
+  }
+
+  if (directionConfidence === "Medium") {
+    return "Path moderate";
+  }
+
+  return "Path weak";
+}
+
 function buildActionLine(
   stats: BandStats,
   representative: StoredOpportunitySpot,
@@ -1342,6 +1422,15 @@ function getEntityName(countryCode: string | undefined): string | undefined {
   } catch {
     return countryCode.toUpperCase();
   }
+}
+
+function normalizeCallsign(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function toShortDirection(direction: string): string {

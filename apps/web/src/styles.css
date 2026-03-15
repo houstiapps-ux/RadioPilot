@@ -635,6 +635,36 @@ body {
   line-height: 1;
 }
 
+.path-stability-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: #4f6a84;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.path-stability-label {
+  color: #6a839d;
+}
+
+.path-stability-value {
+  color: #183149;
+}
+
+.path-stability-strong {
+  color: #166534;
+}
+
+.path-stability-moderate {
+  color: #9a6700;
+}
+
+.path-stability-weak {
+  color: #b45309;
+}
+
 .confidence-high {
   color: #166534;
   background: #dcfce7;

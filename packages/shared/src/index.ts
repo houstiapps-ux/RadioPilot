@@ -9,6 +9,7 @@ export * from "./nearbyEngine.js";
 export * from "./opportunityEngine.js";
 export * from "./opportunities.js";
 export * from "./pathDensity.js";
+export * from "./pathStability.js";
 export * from "./parser.js";
 export * from "./pskTrends.js";
 export * from "./types.js";

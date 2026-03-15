@@ -24,9 +24,17 @@ type OpportunityCard = {
   confidence?: "Low" | "Medium" | "High";
   activityLevel?: "High" | "Moderate" | "Low";
   confidenceReason?: string;
+  evidenceFlags?: {
+    cluster: boolean;
+    psk: boolean;
+    solar: boolean;
+  };
+  supportChips?: readonly string[];
   bandState?: "Opening" | "Stable" | "Fading";
   trendLabel?: "Rising" | "Steady" | "Falling";
   directionConfidence?: "High" | "Medium" | "Low";
+  pathStability?: "Strong" | "Moderate" | "Weak";
+  pathStabilityScore?: number;
   strongestPropagationSignal?: string;
   dxEventType?: string;
   signals?: readonly string[];
@@ -543,6 +551,15 @@ function OperatorCard(props: {
         <ConfidenceMetaLine value={view.confidence} card={props.card} />
       </div>
 
+      {props.card.pathStability ? (
+        <div className="path-stability-line">
+          <span className="path-stability-label">Path stability:</span>
+          <span className={`path-stability-value path-stability-${props.card.pathStability.toLowerCase()}`}>
+            {props.card.pathStability}
+          </span>
+        </div>
+      ) : null}
+
       <p className="operator-reason">{view.reasonSummary}</p>
 
       {props.card.actionLine ? (
@@ -682,7 +699,9 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   reasonSummary: string;
   tagItems: readonly string[];
 } {
-  const directionLine = card.direction ? formatDirectionShort(card.direction) : "Direction unavailable";
+  const directionLine = card.direction
+    ? formatDirectionWithConfidence(card.direction, card.directionConfidence)
+    : "Direction unavailable";
   const beamHeading = typeof card.bearing === "number" && Number.isFinite(card.bearing)
     ? `${Math.round(card.bearing)}°`
     : "Unavailable";
@@ -970,6 +989,15 @@ function formatDirectionShort(direction: string): string {
   }
 }
 
+function formatDirectionWithConfidence(
+  direction: string,
+  directionConfidence: OpportunityCard["directionConfidence"],
+): string {
+  const shortDirection = formatDirectionShort(direction);
+
+  return directionConfidence ? `${shortDirection} · ${directionConfidence}` : shortDirection;
+}
+
 function formatOperatorSummary(summary: string | undefined, fallback: string): string {
   return safeText(summary, fallback)
     .replaceAll("North-East", "NE")
@@ -986,6 +1014,24 @@ function formatOperatorSummary(summary: string | undefined, fallback: string): s
 }
 
 function getEvidenceItems(card: OpportunityCard): readonly string[] {
+  if (card.evidenceFlags) {
+    const items: string[] = [];
+
+    if (card.evidenceFlags.cluster) {
+      items.push("Cluster ✓");
+    }
+
+    if (card.evidenceFlags.psk) {
+      items.push("PSK ✓");
+    }
+
+    if (card.evidenceFlags.solar) {
+      items.push("Solar ✓");
+    }
+
+    return items;
+  }
+
   const signals = card.signals ?? [];
   const why = card.why ?? [];
   const confidenceReason = card.confidenceReason ?? "";
@@ -1035,40 +1081,63 @@ function getIntelligenceChips(card: OpportunityCard, tone: PanelTone): readonly 
     chips.push(card.bandState);
   }
 
-  if (card.directionConfidence) {
-    chips.push(`Path ${card.directionConfidence.toLowerCase()}`);
+  for (const chip of card.supportChips ?? []) {
+    if (!chips.includes(chip)) {
+      chips.push(chip);
+    }
+  }
+
+  if (!card.supportChips?.length && card.directionConfidence) {
+    chips.push(formatPathSupportChip(card.directionConfidence));
   }
 
   if (tone === "dx" && card.dxEventType) {
-    chips.push(card.dxEventType);
+    chips.push(normalizeDxSignal(card.dxEventType));
   } else if (card.strongestPropagationSignal) {
     chips.push(card.strongestPropagationSignal);
   }
 
-  if (card.confidenceReason) {
-    chips.push(card.confidenceReason);
-  }
-
   for (const signal of card.signals ?? []) {
+    const normalizedSignal = tone === "dx" ? normalizeDxSignal(signal) : signal;
+
     if (
-      !chips.includes(signal) &&
+      !chips.includes(normalizedSignal) &&
       (
         tone !== "dx" ||
         signal === card.dxEventType ||
         signal.includes("Rare DX") ||
         signal.includes("DXpedition") ||
         signal.includes("spotter") ||
-        signal.includes("Multi-band")
+        signal.includes("Multi-band") ||
+        signal.includes("Fresh")
       )
     ) {
-      chips.push(signal);
+      chips.push(normalizedSignal);
     }
   }
 
   return chips.slice(0, tone === "watch" ? 4 : 3);
 }
 
+function formatPathSupportChip(
+  directionConfidence: OpportunityCard["directionConfidence"],
+): string {
+  if (directionConfidence === "High") {
+    return "Path strong";
+  }
+
+  if (directionConfidence === "Medium") {
+    return "Path moderate";
+  }
+
+  return "Path weak";
+}
+
 function getWhyItems(card: OpportunityCard, tone: PanelTone): readonly string[] {
+  if (tone === "dx") {
+    return getDxWhyItems(card);
+  }
+
   const items = [...(card.why ?? [])];
 
   if (tone === "watch" && card.signals) {
@@ -1087,6 +1156,84 @@ function getWhyItems(card: OpportunityCard, tone: PanelTone): readonly string[] 
   }
 
   return items.slice(0, 4);
+}
+
+function getDxWhyItems(card: OpportunityCard): readonly string[] {
+  const prioritized: string[] = [];
+
+  if (card.dxEventType) {
+    prioritized.push(normalizeDxSignal(card.dxEventType));
+  }
+
+  for (const signal of prioritizeDxSignals(card.signals ?? [])) {
+    const normalizedSignal = normalizeDxSignal(signal);
+
+    if (!prioritized.includes(normalizedSignal)) {
+      prioritized.push(normalizedSignal);
+    }
+  }
+
+  if (
+    !prioritized.includes("Fresh DX activity") &&
+    (card.why ?? []).some((item) => /\brecent spots\b/i.test(item))
+  ) {
+    prioritized.push("Fresh DX activity");
+  }
+
+  return prioritized.slice(0, 4);
+}
+
+function prioritizeDxSignals(signals: readonly string[]): readonly string[] {
+  const prioritized = [...signals];
+
+  prioritized.sort((left, right) => getDxSignalPriority(left) - getDxSignalPriority(right));
+  return prioritized;
+}
+
+function getDxSignalPriority(signal: string): number {
+  const normalized = signal.toUpperCase();
+
+  if (normalized.includes("RARE DX")) {
+    return 0;
+  }
+
+  if (normalized.includes("DXPEDITION")) {
+    return 1;
+  }
+
+  if (normalized.includes("SPOTTER")) {
+    return 2;
+  }
+
+  if (normalized.includes("MULTI-BAND")) {
+    return 3;
+  }
+
+  if (normalized.includes("FRESH")) {
+    return 4;
+  }
+
+  return 10;
+}
+
+function normalizeDxSignal(signal: string): string {
+  if (signal === "High spotter interest") {
+    return "Strong spotter interest";
+  }
+
+  if (signal === "Possible DXpedition") {
+    return "Possible DXpedition";
+  }
+
+  if (signal === "Rare DX active") {
+    return "Rare DX active";
+  }
+
+  if (signal === "Multi-band DX activity") {
+    return "Multi-band activity";
+  }
+
+  return signal;
 }
 
 function parseSolarNumber(value: number | string | undefined): number | null {

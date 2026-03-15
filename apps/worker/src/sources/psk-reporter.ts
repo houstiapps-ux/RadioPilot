@@ -914,6 +914,7 @@ function bandToMockFrequencyHz(band: Band): number {
     "6m": 50313000,
     "2m": 144174000,
     "70cm": 432174000,
+    "23cm": 1296541000,
   };
 
   return centerFrequencies[band];

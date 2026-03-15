@@ -12,6 +12,7 @@ const BAND_RANGES = [
   { band: "6m", min: 50000, max: 54000 },
   { band: "2m", min: 144000, max: 148000 },
   { band: "70cm", min: 430000, max: 440000 },
+  { band: "23cm", min: 1240000, max: 1300000 },
 ] as const;
 
 export type Band = (typeof BAND_RANGES)[number]["band"];

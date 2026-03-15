@@ -31,6 +31,8 @@ test("enriches opportunities with dominant direction, bearing, region, and confi
   assert.equal(snapshot.bestOpportunity.region, "North America");
   assert.equal(snapshot.bestOpportunity.confidence, "High");
   assert.equal(snapshot.bestOpportunity.directionConfidence, "Low");
+  assert.equal(snapshot.bestOpportunity.pathStability, "Moderate");
+  assert.ok(typeof snapshot.bestOpportunity.pathStabilityScore === "number");
   assert.equal(snapshot.bestOpportunity.cardType, "best");
   assert.equal(snapshot.bestOpportunity.bandState, "Opening");
   assert.ok(Array.isArray(snapshot.bestOpportunity.signals));
@@ -217,6 +219,56 @@ test("applies PSK summary boosts and exposes debug details", () => {
   assert.equal(debug.bands[0]?.pskCurrent, 80);
   assert.equal(debug.bands[0]?.pskPrevious, 40);
   assert.equal(debug.bands[0]?.pskBoostApplied, true);
+});
+
+test("keeps confidence reason and evidence flags aligned when PSK is present", () => {
+  const observedAt = "2026-03-15T11:58:00.000Z";
+  const [storedSpot] = parseStoredOpportunitySpot(JSON.stringify({
+    id: "spot-psk-2",
+    source: "dxheat",
+    spotterCallsign: "EI2TEST",
+    spottedCallsign: "EA8ABC",
+    continentDx: "AF",
+    countryCode: "ES",
+    dxLocator: "IL18",
+    frequencyKHz: 14074,
+    band: "20m",
+    observedAt,
+    mode: "ft8",
+    modeFamily: "digital",
+    comment: "CQ",
+    tags: ["FT8"],
+    receivedAt: observedAt,
+  }));
+
+  const pskSummary: PskReporterSummary = {
+    generatedAt: "2026-03-15T12:00:00.000Z",
+    freshnessTimestamp: "2026-03-15T11:59:30.000Z",
+    currentWindowStart: "2026-03-15T11:45:00.000Z",
+    previousWindowStart: "2026-03-15T11:30:00.000Z",
+    windowMinutes: 15,
+    bands: [{
+      band: "20m",
+      currentWindowCount: 8,
+      previousWindowCount: 6,
+      trend: 2,
+      modeCounts: { FT8: 8 },
+      directionCounts: { SE: 3 },
+      pathCounts: { AF: 1 } as never,
+      uniqueSenderLocatorCount: 4,
+      uniqueReceiverLocatorCount: 4,
+    }],
+  };
+
+  const snapshot = buildOpportunitySnapshot([storedSpot], {
+    now: Date.parse("2026-03-15T12:00:00.000Z"),
+    homeGrid: "IO63UI",
+    pskSummary,
+  });
+
+  assert.equal(snapshot.bestOpportunity?.evidenceFlags?.psk, true);
+  assert.equal(snapshot.bestOpportunity?.confidenceReason, "Path confirmed, but activity still light");
+  assert.deepEqual(snapshot.bestOpportunity?.supportChips, ["Path weak"]);
 });
 
 test("prefers a rarer DX candidate over duplicating best opportunity", () => {

@@ -39,10 +39,18 @@ export interface OpportunityCard {
   readonly bearing?: number;
   readonly beamHeading?: number;
   readonly directionConfidence?: "High" | "Medium" | "Low";
+  readonly pathStability?: "Strong" | "Moderate" | "Weak";
+  readonly pathStabilityScore?: number;
   readonly strongestPropagationSignal?: string;
   readonly region?: string;
   readonly confidence?: "Low" | "Medium" | "High";
   readonly confidenceReason?: string;
+  readonly evidenceFlags?: {
+    readonly cluster: boolean;
+    readonly psk: boolean;
+    readonly solar: boolean;
+  };
+  readonly supportChips?: readonly string[];
   readonly activityLevel?: "High" | "Moderate" | "Low";
   readonly bandState?: "Opening" | "Stable" | "Fading";
   readonly freshnessSeconds?: number;

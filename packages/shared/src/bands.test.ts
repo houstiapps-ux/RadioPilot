@@ -9,8 +9,10 @@ import {
 
 test("derives common amateur bands from frequency", () => {
   assert.equal(deriveBandFromFrequencyKhz(7074), "40m");
-  assert.equal(deriveBandFromFrequencyKhz(14085), "20m");
-  assert.equal(deriveBandFromFrequencyKhz(432100), "70cm");
+  assert.equal(deriveBandFromFrequencyKhz(14074), "20m");
+  assert.equal(deriveBandFromFrequencyKhz(144174), "2m");
+  assert.equal(deriveBandFromFrequencyKhz(432174), "70cm");
+  assert.equal(deriveBandFromFrequencyKhz(1296541), "23cm");
 });
 
 test("keeps a valid source band and falls back when source band is invalid", () => {
