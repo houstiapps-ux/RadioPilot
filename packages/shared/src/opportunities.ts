@@ -240,15 +240,6 @@ export function buildOpportunitySnapshotWithDebug(
       ),
     );
   const intentRankedBands = preferBandsForChasing(rankedBands, normalizedChasing);
-  const rankedCards = intentRankedBands.map(({ card, filterMatchLabels }, index) =>
-    withCardType(
-      {
-        ...card,
-        filterMatchLabels,
-      },
-      index === 0 ? "best" : "watch",
-    )
-  );
   const nearby = findNearbyOpportunities(
     { homeGrid: normalizedHomeGrid },
     currentSpots,
@@ -284,28 +275,46 @@ export function buildOpportunitySnapshotWithDebug(
     solar,
     normalizedChasing,
   );
+  const bestCandidate = intentRankedBands.find(({ stats, card }) =>
+    isMeaningfulBestOpportunity(stats, card)
+  );
+  const bestOpportunity = bestCandidate
+    ? withCardType({
+      ...bestCandidate.card,
+      filterMatchLabels: bestCandidate.filterMatchLabels,
+    }, "best")
+    : null;
+  const watchNextCards = watchNextBands
+    .filter(({ card }) => card.id !== (bestOpportunity?.id ?? ""))
+    .filter(({ stats, card }) => isMeaningfulWatchOpportunity(stats, card))
+    .slice(0, 3)
+    .map(({ card, filterMatchLabels }) => withCardType({ ...card, filterMatchLabels }, "watch"));
   const dxOpportunity = selectDxOpportunityCard(
     dxCandidates,
-    rankedCards[0] ?? null,
-    watchNextBands[0]?.card ? withCardType(watchNextBands[0].card, "watch") : null,
+    bestOpportunity,
   );
-  const selectedBestId = rankedCards[0]?.id ?? null;
+  const nearbyCards = filterNearbyCards(
+    nearby.cards,
+    normalizedChasing,
+    normalizedModeFilter,
+    normalizedBandScope,
+  )
+    .filter(isMeaningfulNearbyOpportunity)
+    .slice(0, 3);
+  const selectedBestId = bestOpportunity?.id ?? null;
   const selectedWatchIds = new Set(
-    watchNextBands
-      .filter(({ card }) => card.id !== (selectedBestId ?? ""))
-      .slice(0, 3)
-      .map(({ card }) => card.id),
+    watchNextCards.map((card) => card.id),
   );
   const selectedDxId = dxOpportunity?.id ?? null;
 
   const snapshot = {
     generatedAt: new Date(now).toISOString(),
-    cards: rankedCards,
-    bestOpportunity: rankedCards[0] ?? null,
-    watchNext: watchNextBands
-      .filter(({ card }) => card.id !== (rankedCards[0]?.id ?? ""))
-      .slice(0, 3)
-      .map(({ card, filterMatchLabels }) => withCardType({ ...card, filterMatchLabels }, "watch")),
+    cards: [
+      ...(bestOpportunity ? [bestOpportunity] : []),
+      ...watchNextCards,
+    ],
+    bestOpportunity,
+    watchNext: watchNextCards,
     dxOpportunity: dxOpportunity
       ? withCardType({
         ...dxOpportunity,
@@ -317,12 +326,7 @@ export function buildOpportunitySnapshotWithDebug(
         ),
       }, "dx")
       : null,
-    nearbyActivity: filterNearbyCards(
-      nearby.cards,
-      normalizedChasing,
-      normalizedModeFilter,
-      normalizedBandScope,
-    ).slice(0, 3),
+    nearbyActivity: nearbyCards,
   };
 
   return {
@@ -360,7 +364,7 @@ export function buildOpportunitySnapshotWithDebug(
       scoreBreakdown: candidate.scoreBreakdown,
       rejectionReasons: buildDxCandidateRejectionReasons(
         candidate,
-        rankedCards[0] ?? null,
+        bestOpportunity,
         selectedDxId,
       ),
       activityScore: roundDebugScore(candidate.activityScore),
@@ -1035,15 +1039,22 @@ function buildDxCandidates(
 function selectDxOpportunityCard(
   candidates: readonly DxCandidate[],
   bestOpportunity: OpportunityCard | null,
-  fallback: OpportunityCard | null,
 ): OpportunityCard | null {
+  let fallbackMeaningful: OpportunityCard | null = null;
+
   for (const candidate of candidates) {
+    if (!isMeaningfulDxCandidate(candidate)) {
+      continue;
+    }
+
+    fallbackMeaningful ??= candidate.card;
+
     if (!isDuplicateOpportunity(candidate.card, bestOpportunity) || candidate.rarityScore >= 0.7) {
       return candidate.card;
     }
   }
 
-  return fallback;
+  return fallbackMeaningful;
 }
 
 function buildBandDxCandidates(
@@ -1977,6 +1988,74 @@ function filterNearbyCards(
     .filter((card) => matchesCardFilters(card, modeFilter, bandScope))
     .filter((card) => !chasing || matchesChasingCardPreference(card, chasing))
     .sort((left, right) => scoreNearbyIntentCard(right, chasing) - scoreNearbyIntentCard(left, chasing));
+}
+
+function isMeaningfulBestOpportunity(
+  stats: BandStats,
+  _card: OpportunityCard,
+): boolean {
+  return stats.totalSpots > 0;
+}
+
+function isMeaningfulWatchOpportunity(
+  stats: BandStats,
+  card: OpportunityCard,
+): boolean {
+  const openingSignal =
+    card.bandState === "Opening" ||
+    card.trendLabel === "Rising" ||
+    stats.pskTrendRising ||
+    stats.activityTrend > 0;
+  const supportPresent =
+    stats.pskCurrent > 0 ||
+    stats.totalSpots >= 3 ||
+    stats.predictedBandScore >= 0.65;
+
+  if (!openingSignal || !supportPresent) {
+    return false;
+  }
+
+  if (card.confidence === "Low" && stats.pskCurrent === 0 && stats.predictedBandScore < 0.75) {
+    return false;
+  }
+
+  return true;
+}
+
+function isMeaningfulDxCandidate(candidate: DxCandidate): boolean {
+  if (candidate.eventType || candidate.rarityScore >= 0.7) {
+    return true;
+  }
+
+  if (candidate.card.portable) {
+    return true;
+  }
+
+  if (candidate.card.countryCode && candidate.card.countryCode !== "US" && candidate.card.countryCode !== "IE") {
+    return true;
+  }
+
+  if (candidate.card.confidence === "Low" && candidate.pathScore < 0.2) {
+    return false;
+  }
+
+  if (candidate.activityScore >= 0.25 && candidate.pathScore >= 0.8) {
+    return true;
+  }
+
+  return candidate.activityScore >= 0.45 && candidate.pathScore >= 0.2;
+}
+
+function isMeaningfulNearbyOpportunity(card: OpportunityCard): boolean {
+  if (card.portable || card.confidence === "High") {
+    return true;
+  }
+
+  if (card.regional && (card.activityLevel === "High" || card.activityLevel === "Moderate")) {
+    return true;
+  }
+
+  return false;
 }
 
 function preferBandsForChasing(

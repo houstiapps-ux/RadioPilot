@@ -428,6 +428,46 @@ test("returns no best opportunity when a chasing filter has no matching candidat
   assert.equal(snapshot.nearbyActivity.length, 0);
 });
 
+test("returns empty opportunities during a low-activity window with no current spots", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const snapshot = buildOpportunitySnapshot([
+    createSpot("K1ABC", "FN31PR", "phone", "2026-03-15T11:20:00.000Z", 14250, "20m", ["SSB"]),
+  ], {
+    now,
+    homeGrid: "IO63UI",
+  });
+
+  assert.equal(snapshot.bestOpportunity, null);
+  assert.equal(snapshot.watchNext.length, 0);
+  assert.equal(snapshot.dxOpportunity, null);
+});
+
+test("suppresses weak non-portable nearby activity when it is only extended regional and low confidence", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const snapshot = buildOpportunitySnapshot([
+    createSpot("DL1ABC", "JN58TD", "phone", "2026-03-15T11:59:00.000Z", 14250, "20m", ["SSB"]),
+  ], {
+    now,
+    homeGrid: "IO63UI",
+  });
+
+  assert.equal(snapshot.nearbyActivity.length, 0);
+});
+
+test("allows strong nearby portable activity to survive empty-state hardening", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const snapshot = buildOpportunitySnapshot([
+    createSpot("EI7ABC/P", "IO63VG", "digital", "2026-03-15T11:59:30.000Z", 7074, "40m", ["SOTA", "/P", "FT8"]),
+    createSpot("EI7ABC/P", "IO63VG", "digital", "2026-03-15T11:58:30.000Z", 7074, "40m", ["SOTA", "/P", "FT8"]),
+  ], {
+    now,
+    homeGrid: "IO63UI",
+  });
+
+  assert.equal(snapshot.nearbyActivity.length, 1);
+  assert.equal(snapshot.nearbyActivity[0]?.callsign, "EI7ABC/P");
+});
+
 function createSpot(
   callsign: string,
   dxLocator: string,
