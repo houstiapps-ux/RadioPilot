@@ -69,6 +69,43 @@ body {
   align-items: start;
 }
 
+.intent-bar {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 10px 24px rgba(35, 66, 102, 0.08);
+}
+
+.filter-group {
+  min-width: 0;
+}
+
+.filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.filter-chip {
+  padding: 6px 11px;
+  border: 1px solid rgba(155, 182, 208, 0.55);
+  border-radius: 999px;
+  background: rgba(247, 251, 255, 0.82);
+  color: #48637f;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.filter-chip-active {
+  background: linear-gradient(180deg, #d9ecff, #c5e0fb);
+  color: #163a5f;
+  border-color: rgba(93, 140, 187, 0.65);
+}
+
 .station-bar,
 .solar-card,
 .settings-panel,
@@ -633,6 +670,10 @@ body {
 }
 
 @media (min-width: 760px) {
+  .intent-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .solar-panel {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: start;

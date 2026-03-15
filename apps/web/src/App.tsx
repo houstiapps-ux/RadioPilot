@@ -4,6 +4,7 @@ import {
   buildOpportunityRequestQuery,
   loadOperatorSettings,
   saveHomeGrid,
+  saveOperatorIntent,
   type OperatorSettings,
 } from "./settings";
 
@@ -140,6 +141,49 @@ export function App() {
         </div>
       </section>
 
+      <section className="intent-bar">
+        <FilterGroup
+          label="Chasing"
+          value={settings.chasing ?? "any"}
+          options={[
+            { value: "any", label: "Any" },
+            { value: "dx", label: "DX" },
+            { value: "pota", label: "POTA" },
+            { value: "sota", label: "SOTA" },
+            { value: "portable", label: "Portable" },
+            { value: "digital", label: "Digital" },
+          ]}
+          onChange={(value) => {
+            setSettings(saveOperatorIntent({ chasing: value as OperatorSettings["chasing"] }));
+          }}
+        />
+        <FilterGroup
+          label="Mode"
+          value={settings.modeFilter ?? "any"}
+          options={[
+            { value: "any", label: "Any" },
+            { value: "ssb", label: "SSB" },
+            { value: "cw", label: "CW" },
+            { value: "digital", label: "Digital" },
+          ]}
+          onChange={(value) => {
+            setSettings(saveOperatorIntent({ modeFilter: value as OperatorSettings["modeFilter"] }));
+          }}
+        />
+        <FilterGroup
+          label="Band Scope"
+          value={settings.bandScope ?? "any"}
+          options={[
+            { value: "any", label: "Any" },
+            { value: "hf", label: "HF" },
+            { value: "vhf-uhf", label: "VHF/UHF" },
+          ]}
+          onChange={(value) => {
+            setSettings(saveOperatorIntent({ bandScope: value as OperatorSettings["bandScope"] }));
+          }}
+        />
+      </section>
+
       <section className="solar-card">
         <SolarPanel data={solarData} />
       </section>
@@ -252,6 +296,33 @@ function SettingsPanel(props: {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function FilterGroup(props: {
+  label: string;
+  value: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="filter-group">
+      <span className="strip-label">{props.label}</span>
+      <div className="filter-chip-row">
+        {props.options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`filter-chip ${props.value === option.value ? "filter-chip-active" : ""}`}
+            onClick={() => {
+              props.onChange(option.value);
+            }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

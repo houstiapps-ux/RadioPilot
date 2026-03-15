@@ -13,6 +13,7 @@ import {
   getAllBandTrends,
   parseMaidenheadLocator,
   parseStoredOpportunitySpot,
+  summarizeStoredSpotBandResolution,
   type PskBandTrendMap,
   type PskReporterSummary,
   type SolarConditions,
@@ -441,6 +442,9 @@ async function buildPersonalizedSnapshotDebug(
 ): Promise<ReturnType<typeof buildOpportunitySnapshotWithDebug>> {
   const homeGrid = getHomeGridFromQuery(query);
   const operatingStyle = getOperatingStyleFromQuery(query);
+  const chasing = getChasingFromQuery(query);
+  const modeFilter = getModeFilterFromQuery(query);
+  const bandScope = getBandScopeFromQuery(query);
   const now = Date.now();
   const [rawSpots, rawSolar, rawPsk, pskTrends, bandPredictions, propagationDensity] = await Promise.all([
     redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
@@ -463,6 +467,9 @@ async function buildPersonalizedSnapshotDebug(
     JSON.stringify({
       homeGrid: homeGrid ?? null,
       operatingStyle: operatingStyle ?? null,
+      chasing: chasing ?? null,
+      modeFilter: modeFilter ?? null,
+      bandScope: bandScope ?? null,
       spotCount: spots.length,
       spotsWithDxLocator,
     }),
@@ -474,13 +481,25 @@ async function buildPersonalizedSnapshotDebug(
       solar,
     };
 
-    return { snapshot: empty, bands: [], dxCandidates: [] };
+    return {
+      snapshot: empty,
+      bands: [],
+      dxCandidates: [],
+      bandResolution: {
+        sourceBandMissing: 0,
+        frequencyDerivedBandUsed: 0,
+        unresolvedBand: 0,
+      },
+    };
   }
 
   const built = buildOpportunitySnapshotWithDebug(spots, {
     now,
     homeGrid,
     operatingStyle,
+    chasing,
+    modeFilter,
+    bandScope,
     pskSummary: isFreshPskSummary(pskSummary, now) ? pskSummary : null,
     pskTrends: filterFreshPskTrends(pskTrends, now),
     dxRarity,
@@ -493,8 +512,61 @@ async function buildPersonalizedSnapshotDebug(
     ...built.snapshot,
     solar,
   };
+  const bandResolution = summarizeStoredSpotBandResolution(rawSpots);
 
-  return { ...built, snapshot };
+  return { ...built, snapshot, bandResolution };
+}
+
+function getChasingFromQuery(
+  query: unknown,
+): "dx" | "pota" | "sota" | "portable" | "digital" | undefined {
+  const chasing = Reflect.get(query as object, "chasing");
+
+  if (typeof chasing !== "string") {
+    return undefined;
+  }
+
+  const normalized = chasing.trim().toLowerCase();
+
+  if (
+    normalized === "dx" ||
+    normalized === "pota" ||
+    normalized === "sota" ||
+    normalized === "portable" ||
+    normalized === "digital"
+  ) {
+    return normalized;
+  }
+
+  return undefined;
+}
+
+function getModeFilterFromQuery(
+  query: unknown,
+): "ssb" | "cw" | "digital" | undefined {
+  const mode = Reflect.get(query as object, "mode");
+
+  if (typeof mode !== "string") {
+    return undefined;
+  }
+
+  const normalized = mode.trim().toLowerCase();
+  return normalized === "ssb" || normalized === "cw" || normalized === "digital"
+    ? normalized
+    : undefined;
+}
+
+function getBandScopeFromQuery(
+  query: unknown,
+): "hf" | "vhf-uhf" | undefined {
+  const bandScope = Reflect.get(query as object, "bandScope");
+
+  if (typeof bandScope !== "string") {
+    return undefined;
+  }
+
+  const normalized = bandScope.trim().toLowerCase();
+  return normalized === "hf" || normalized === "vhf-uhf" ? normalized : undefined;
 }
 
 function isFreshPskSummary(summary: PskReporterSummary | null, now: number): boolean {

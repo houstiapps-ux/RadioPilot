@@ -5,6 +5,7 @@ import {
   buildOpportunitySnapshot,
   buildOpportunitySnapshotWithDebug,
   parseStoredOpportunitySpot,
+  summarizeStoredSpotBandResolution,
   type StoredOpportunitySpot,
 } from "./opportunities.js";
 import type { PskReporterSummary } from "./types.js";
@@ -72,6 +73,63 @@ test("preserves countryCode from stored spots into generated opportunity cards",
   assert.equal(snapshot.bestOpportunity.countryCode, "ES");
   assert.equal(snapshot.cards[0]?.countryCode, "ES");
   assert.equal(snapshot.dxOpportunity?.countryCode, "ES");
+});
+
+test("derives band from frequency when stored band is missing or invalid", () => {
+  const [missingBandSpot] = parseStoredOpportunitySpot(JSON.stringify({
+    id: "spot-band-1",
+    source: "dxheat",
+    spotterCallsign: "EI2TEST",
+    spottedCallsign: "K1ABC",
+    dxLocator: "FN31PR",
+    frequencyKHz: 7074,
+    band: "unknown",
+    observedAt: "2026-03-15T11:58:00.000Z",
+    mode: "ft8",
+    modeFamily: "digital",
+    comment: "CQ",
+    tags: ["FT8"],
+    receivedAt: "2026-03-15T11:58:05.000Z",
+  }));
+
+  assert.ok(missingBandSpot);
+  assert.equal(missingBandSpot.band, "40m");
+
+  const resolution = summarizeStoredSpotBandResolution([
+    JSON.stringify({
+      id: "spot-band-1",
+      source: "dxheat",
+      spotterCallsign: "EI2TEST",
+      spottedCallsign: "K1ABC",
+      dxLocator: "FN31PR",
+      frequencyKHz: 7074,
+      band: "unknown",
+      observedAt: "2026-03-15T11:58:00.000Z",
+      mode: "ft8",
+      modeFamily: "digital",
+      comment: "CQ",
+      tags: ["FT8"],
+      receivedAt: "2026-03-15T11:58:05.000Z",
+    }),
+    JSON.stringify({
+      id: "spot-band-2",
+      source: "dxheat",
+      spotterCallsign: "EI2TEST",
+      spottedCallsign: "K1XYZ",
+      dxLocator: "FN20AB",
+      frequencyKHz: 999999,
+      observedAt: "2026-03-15T11:57:00.000Z",
+      comment: "CQ",
+      tags: [],
+      receivedAt: "2026-03-15T11:57:05.000Z",
+    }),
+  ]);
+
+  assert.deepEqual(resolution, {
+    sourceBandMissing: 2,
+    frequencyDerivedBandUsed: 1,
+    unresolvedBand: 1,
+  });
 });
 
 test("uses the representative spot locator for card direction and bearing", () => {
@@ -206,11 +264,33 @@ test("builds nearby activity from regional distance and portable context", () =>
   assert.ok(typeof snapshot.nearbyActivity[0]?.distanceKm === "number");
 });
 
+test("applies request-time intent filters to ranking and band scope", () => {
+  const now = Date.parse("2026-03-15T12:00:00.000Z");
+  const snapshot = buildOpportunitySnapshot([
+    createSpot("EI7ABC/P", "IO63VG", "digital", "2026-03-15T11:59:00.000Z", 7074, "40m", ["POTA", "/P", "FT8"]),
+    createSpot("K1ABC", "FN31PR", "phone", "2026-03-15T11:58:00.000Z", 14250, "20m", ["SSB"]),
+    createSpot("ON4CW", "JO20AB", "cw", "2026-03-15T11:57:00.000Z", 144174, "2m", ["CW"]),
+  ], {
+    now,
+    homeGrid: "IO63UI",
+    chasing: "pota",
+    modeFilter: "digital",
+    bandScope: "hf",
+  });
+
+  assert.equal(snapshot.bestOpportunity?.callsign, "EI7ABC/P");
+  assert.equal(snapshot.dxOpportunity?.callsign, "EI7ABC/P");
+  assert.ok(snapshot.nearbyActivity.every((card) => card.band !== "2m"));
+});
+
 function createSpot(
   callsign: string,
   dxLocator: string,
   modeFamily: StoredOpportunitySpot["modeFamily"],
   observedAt: string,
+  frequencyKHz = 14250,
+  band: StoredOpportunitySpot["band"] = "20m",
+  tags: StoredOpportunitySpot["tags"] = [],
 ): StoredOpportunitySpot {
   return {
     id: `${callsign}|${observedAt}`,
@@ -220,13 +300,13 @@ function createSpot(
     continentDx: callsign === "FT4GL" ? "AF" : callsign.startsWith("EI") ? "EU" : "NA",
     countryCode: callsign === "FT4GL" ? "FR" : callsign.startsWith("EI") ? "IE" : "US",
     dxLocator,
-    frequencyKHz: 14250,
-    band: "20m",
+    frequencyKHz,
+    band,
     observedAt,
     mode: modeFamily === "phone" ? "ssb" : modeFamily === "cw" ? "cw" : "ft8",
     modeFamily,
     comment: "Test spot",
-    tags: [],
+    tags,
     receivedAt: observedAt,
   };
 }

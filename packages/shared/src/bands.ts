@@ -11,11 +11,12 @@ const BAND_RANGES = [
   { band: "10m", min: 28000, max: 29700 },
   { band: "6m", min: 50000, max: 54000 },
   { band: "2m", min: 144000, max: 148000 },
+  { band: "70cm", min: 430000, max: 440000 },
 ] as const;
 
 export type Band = (typeof BAND_RANGES)[number]["band"];
 
-export function lookupBand(frequencyKHz: number): Band | null {
+export function deriveBandFromFrequencyKhz(frequencyKHz: number): Band | null {
   for (const range of BAND_RANGES) {
     if (frequencyKHz >= range.min && frequencyKHz <= range.max) {
       return range.band;
@@ -23,4 +24,23 @@ export function lookupBand(frequencyKHz: number): Band | null {
   }
 
   return null;
+}
+
+export function lookupBand(frequencyKHz: number): Band | null {
+  return deriveBandFromFrequencyKhz(frequencyKHz);
+}
+
+export function isValidBand(value: unknown): value is Band {
+  return BAND_RANGES.some((range) => range.band === value);
+}
+
+export function resolveBand(
+  sourceBand: unknown,
+  frequencyKHz: number,
+): Band | null {
+  if (isValidBand(sourceBand)) {
+    return sourceBand;
+  }
+
+  return deriveBandFromFrequencyKhz(frequencyKHz);
 }

@@ -3,6 +3,7 @@ import {
   scoreDxCandidate,
   type DxRarityContext,
 } from "./dxRarity.js";
+import { deriveBandFromFrequencyKhz, isValidBand, resolveBand } from "./bands.js";
 import { findNearbyOpportunities } from "./nearbyEngine.js";
 import {
   deriveContinentFromMaidenhead,
@@ -26,6 +27,9 @@ interface BuildOpportunitySnapshotOptions {
   readonly now?: number;
   readonly homeGrid?: string;
   readonly operatingStyle?: string;
+  readonly chasing?: "dx" | "pota" | "sota" | "portable" | "digital";
+  readonly modeFilter?: "ssb" | "cw" | "digital";
+  readonly bandScope?: "hf" | "vhf-uhf";
   readonly pskSummary?: PskReporterSummary | null;
   readonly pskTrends?: PskBandTrendMap | null;
   readonly dxRarity?: DxRarityContext | null;
@@ -103,6 +107,11 @@ export interface OpportunityDebugSnapshot {
   readonly snapshot: OpportunitySnapshot;
   readonly bands: readonly OpportunityDebugBand[];
   readonly dxCandidates: readonly OpportunityDebugDxCandidate[];
+  readonly bandResolution: {
+    readonly sourceBandMissing: number;
+    readonly frequencyDerivedBandUsed: number;
+    readonly unresolvedBand: number;
+  };
 }
 
 type ModeFamilyKey = "cw" | "phone" | "digital" | "unknown";
@@ -131,6 +140,9 @@ export function buildOpportunitySnapshotWithDebug(
     ? deriveContinentFromMaidenhead(normalizedHomeGrid)
     : undefined;
   const normalizedOperatingStyle = normalizeOperatingStyle(options.operatingStyle);
+  const normalizedChasing = normalizeChasingIntent(options.chasing);
+  const normalizedModeFilter = normalizeModeFilter(options.modeFilter);
+  const normalizedBandScope = normalizeBandScope(options.bandScope);
   const pskByBand = indexPskSummaryByBand(options.pskSummary);
   const pskTrends = options.pskTrends ?? {};
   const dxRarity = options.dxRarity ?? null;
@@ -156,13 +168,23 @@ export function buildOpportunitySnapshotWithDebug(
     bandPredictions,
     propagationDensity,
   );
-  const rankedBands = statsByBand
+  const eligibleStats = statsByBand.filter((stats) =>
+    matchesOpportunityFilters(stats, normalizedModeFilter, normalizedBandScope)
+  );
+  const rankedBands = eligibleStats
     .map((stats) => ({
       stats,
       card: createOpportunityCard(stats, stats.representative, normalizedHomeGrid, solar, now),
     }))
     .sort((left, right) =>
-      compareCards(left.card, right.card, left.stats, right.stats, normalizedOperatingStyle),
+      compareCards(
+        left.card,
+        right.card,
+        left.stats,
+        right.stats,
+        normalizedOperatingStyle,
+        normalizedChasing,
+      ),
     );
   const rankedCards = rankedBands.map(({ card }, index) =>
     withCardType(card, index === 0 ? "best" : "watch")
@@ -180,6 +202,7 @@ export function buildOpportunitySnapshotWithDebug(
       left.card,
       right.card,
       normalizedOperatingStyle,
+      normalizedChasing,
     ),
   );
   const dxRankedBands = [...rankedBands].sort((left, right) =>
@@ -189,6 +212,7 @@ export function buildOpportunitySnapshotWithDebug(
       left.card,
       right.card,
       normalizedOperatingStyle,
+      normalizedChasing,
     ),
   );
   const dxCandidates = buildDxCandidates(
@@ -198,6 +222,7 @@ export function buildOpportunitySnapshotWithDebug(
     dxRarity,
     dxEvents,
     solar,
+    normalizedChasing,
   );
   const dxOpportunity = selectDxOpportunityCard(
     dxCandidates,
@@ -214,7 +239,12 @@ export function buildOpportunitySnapshotWithDebug(
       .slice(0, 3)
       .map(({ card }) => withCardType(card, "watch")),
     dxOpportunity: dxOpportunity ? withCardType(dxOpportunity, "dx") : null,
-    nearbyActivity: nearby.cards.slice(0, 3),
+    nearbyActivity: filterNearbyCards(
+      nearby.cards,
+      normalizedChasing,
+      normalizedModeFilter,
+      normalizedBandScope,
+    ).slice(0, 3),
   };
 
   return {
@@ -239,6 +269,14 @@ export function buildOpportunitySnapshotWithDebug(
       finalDxScore: roundDebugScore(candidate.dxScore),
       signals: candidate.signals,
     })),
+    bandResolution: {
+      sourceBandMissing: 0,
+      frequencyDerivedBandUsed: 0,
+      unresolvedBand: statsByBand.reduce(
+        (count, stats) => count + stats.spots.filter((spot) => spot.band === null).length,
+        0,
+      ),
+    },
   };
 }
 
@@ -268,7 +306,7 @@ export function parseStoredOpportunitySpot(rawSpot: string): StoredOpportunitySp
           frequencyKHz: parsed.frequencyKHz,
           frequencyHz:
             typeof parsed.frequencyHz === "number" ? parsed.frequencyHz : undefined,
-          band: parsed.band ?? null,
+          band: resolveBand(parsed.band, parsed.frequencyKHz),
           observedAt:
             typeof parsed.observedAt === "string" ? parsed.observedAt : undefined,
           mode: isParsedMode(parsed.mode) ? parsed.mode : undefined,
@@ -287,6 +325,57 @@ export function parseStoredOpportunitySpot(rawSpot: string): StoredOpportunitySp
   }
 
   return [];
+}
+
+export function summarizeStoredSpotBandResolution(rawSpots: readonly string[]): {
+  sourceBandMissing: number;
+  frequencyDerivedBandUsed: number;
+  unresolvedBand: number;
+} {
+  let sourceBandMissing = 0;
+  let frequencyDerivedBandUsed = 0;
+  let unresolvedBand = 0;
+
+  for (const rawSpot of rawSpots) {
+    try {
+      const parsed = JSON.parse(rawSpot) as Partial<StoredOpportunitySpot>;
+
+      if (
+        typeof parsed.spotterCallsign !== "string" ||
+        typeof parsed.spottedCallsign !== "string" ||
+        typeof parsed.frequencyKHz !== "number" ||
+        typeof parsed.comment !== "string" ||
+        typeof parsed.receivedAt !== "string" ||
+        !Array.isArray(parsed.tags)
+      ) {
+        continue;
+      }
+
+      const sourceBandValid = isValidBand(parsed.band);
+      const derivedBand = deriveBandFromFrequencyKhz(parsed.frequencyKHz);
+      const resolvedBand = resolveBand(parsed.band, parsed.frequencyKHz);
+
+      if (!sourceBandValid) {
+        sourceBandMissing += 1;
+      }
+
+      if (!sourceBandValid && derivedBand !== null) {
+        frequencyDerivedBandUsed += 1;
+      }
+
+      if (resolvedBand === null) {
+        unresolvedBand += 1;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return {
+    sourceBandMissing,
+    frequencyDerivedBandUsed,
+    unresolvedBand,
+  };
 }
 
 function buildBandStats(
@@ -461,9 +550,10 @@ function compareCards(
   leftStats: BandStats,
   rightStats: BandStats,
   operatingStyle: "dx" | undefined,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
 ): number {
-  const leftScore = scoreCard(left, leftStats, operatingStyle);
-  const rightScore = scoreCard(right, rightStats, operatingStyle);
+  const leftScore = scoreCard(left, leftStats, operatingStyle, chasing);
+  const rightScore = scoreCard(right, rightStats, operatingStyle, chasing);
 
   if (rightScore !== leftScore) {
     return rightScore - leftScore;
@@ -486,6 +576,7 @@ function compareWatchNextBandStats(
   leftCard: OpportunityCard,
   rightCard: OpportunityCard,
   operatingStyle: "dx" | undefined,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
 ): number {
   if (left.propagationDirectionConfidence !== right.propagationDirectionConfidence) {
     return compareDirectionConfidence(right.propagationDirectionConfidence) - compareDirectionConfidence(left.propagationDirectionConfidence);
@@ -522,7 +613,7 @@ function compareWatchNextBandStats(
     return right.activityTrend - left.activityTrend;
   }
 
-  return compareCards(leftCard, rightCard, left, right, operatingStyle);
+  return compareCards(leftCard, rightCard, left, right, operatingStyle, chasing);
 }
 
 function isParsedMode(value: unknown): value is ParsedSpot["mode"] {
@@ -736,6 +827,7 @@ function buildDxCandidates(
   dxRarity: DxRarityContext | null,
   dxEvents: readonly DxEventCandidate[],
   solar: SolarConditions | null,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
 ): readonly DxCandidate[] {
   const dxEventsByCallsign = new Map(
     dxEvents.map((candidate) => [candidate.callsign.trim().toUpperCase(), candidate] as const),
@@ -746,8 +838,11 @@ function buildDxCandidates(
       buildBandDxCandidates(stats, homeContinent, homeGrid, dxRarity, dxEventsByCallsign, solar),
     )
     .sort((left, right) => {
-      if (right.dxScore !== left.dxScore) {
-        return right.dxScore - left.dxScore;
+      const rightTotal = right.dxScore + getIntentDxBoost(right, chasing);
+      const leftTotal = left.dxScore + getIntentDxBoost(left, chasing);
+
+      if (rightTotal !== leftTotal) {
+        return rightTotal - leftTotal;
       }
 
       if (right.rarityScore !== left.rarityScore) {
@@ -846,6 +941,7 @@ function compareDxBandStats(
   leftCard: OpportunityCard,
   rightCard: OpportunityCard,
   operatingStyle: "dx" | undefined,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
 ): number {
   if (left.propagationDirectionConfidence !== right.propagationDirectionConfidence) {
     return compareDirectionConfidence(right.propagationDirectionConfidence) - compareDirectionConfidence(left.propagationDirectionConfidence);
@@ -872,7 +968,7 @@ function compareDxBandStats(
     return right.uniqueCallsigns - left.uniqueCallsigns;
   }
 
-  return compareCards(leftCard, rightCard, left, right, operatingStyle);
+  return compareCards(leftCard, rightCard, left, right, operatingStyle, chasing);
 }
 
 function scoreDxActivity(
@@ -1440,6 +1536,154 @@ function normalizeOperatingStyle(value: unknown): "dx" | undefined {
   return value.trim().toLowerCase() === "dx" ? "dx" : undefined;
 }
 
+function normalizeChasingIntent(
+  value: unknown,
+): "dx" | "pota" | "sota" | "portable" | "digital" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  if (
+    normalized === "dx" ||
+    normalized === "pota" ||
+    normalized === "sota" ||
+    normalized === "portable" ||
+    normalized === "digital"
+  ) {
+    return normalized;
+  }
+
+  return undefined;
+}
+
+function normalizeModeFilter(
+  value: unknown,
+): "ssb" | "cw" | "digital" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "ssb" || normalized === "cw" || normalized === "digital"
+    ? normalized
+    : undefined;
+}
+
+function normalizeBandScope(
+  value: unknown,
+): "hf" | "vhf-uhf" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "hf" || normalized === "vhf-uhf" ? normalized : undefined;
+}
+
+function matchesOpportunityFilters(
+  stats: BandStats,
+  modeFilter: "ssb" | "cw" | "digital" | undefined,
+  bandScope: "hf" | "vhf-uhf" | undefined,
+): boolean {
+  if (bandScope && !matchesBandScope(stats.bandKey, bandScope)) {
+    return false;
+  }
+
+  if (!modeFilter) {
+    return true;
+  }
+
+  if (modeFilter === "ssb") {
+    return stats.modeFamilyCounts.phone > 0;
+  }
+
+  if (modeFilter === "cw") {
+    return stats.modeFamilyCounts.cw > 0;
+  }
+
+  return stats.modeFamilyCounts.digital > 0;
+}
+
+function matchesCardFilters(
+  card: OpportunityCard,
+  modeFilter: "ssb" | "cw" | "digital" | undefined,
+  bandScope: "hf" | "vhf-uhf" | undefined,
+): boolean {
+  if (bandScope && !matchesBandScope(card.band ?? "unknown", bandScope)) {
+    return false;
+  }
+
+  if (!modeFilter) {
+    return true;
+  }
+
+  if (modeFilter === "ssb") {
+    return card.tags.includes("SSB") || card.modeSummary?.toUpperCase().includes("SSB") === true;
+  }
+
+  if (modeFilter === "cw") {
+    return card.tags.includes("CW") || card.modeSummary?.toUpperCase().includes("CW") === true;
+  }
+
+  return (
+    card.tags.includes("FT8") ||
+    card.tags.includes("FT4") ||
+    card.modeSummary?.toUpperCase().includes("DIGITAL") === true ||
+    card.modeSummary?.toUpperCase().includes("FT8/FT4") === true
+  );
+}
+
+function matchesBandScope(
+  band: string,
+  bandScope: "hf" | "vhf-uhf",
+): boolean {
+  const vhfUhfBands = new Set(["6m", "2m", "70cm"]);
+
+  if (bandScope === "hf") {
+    return !vhfUhfBands.has(band);
+  }
+
+  return vhfUhfBands.has(band);
+}
+
+function filterNearbyCards(
+  cards: readonly OpportunityCard[],
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+  modeFilter: "ssb" | "cw" | "digital" | undefined,
+  bandScope: "hf" | "vhf-uhf" | undefined,
+): OpportunityCard[] {
+  return cards
+    .filter((card) => matchesCardFilters(card, modeFilter, bandScope))
+    .sort((left, right) => scoreNearbyIntentCard(right, chasing) - scoreNearbyIntentCard(left, chasing));
+}
+
+function scoreNearbyIntentCard(
+  card: OpportunityCard,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+): number {
+  let score = card.score;
+
+  if (!chasing) {
+    return score;
+  }
+
+  if (chasing === "pota" && card.tags.includes("POTA")) {
+    score += 240;
+  } else if (chasing === "sota" && card.tags.includes("SOTA")) {
+    score += 260;
+  } else if (chasing === "portable" && card.portable) {
+    score += 220;
+  } else if (chasing === "digital" && (card.tags.includes("FT8") || card.tags.includes("FT4"))) {
+    score += 120;
+  } else if (chasing === "dx") {
+    score -= 220;
+  }
+
+  return score;
+}
+
 function getDxLocator(parsed: Partial<StoredOpportunitySpot>): string | undefined {
   const rawDxLocator =
     typeof parsed.dxLocator === "string"
@@ -1496,6 +1740,7 @@ function scoreCard(
   card: OpportunityCard,
   stats: BandStats,
   operatingStyle: "dx" | undefined,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
 ): number {
   let score = card.score;
 
@@ -1518,6 +1763,8 @@ function scoreCard(
       score += Math.round(stats.maxDistanceKm / 250);
     }
   }
+
+  score += getIntentScoreBoost(stats, card, chasing);
 
   return score;
 }
@@ -1562,12 +1809,75 @@ function getPskScoreBoost(stats: BandStats): number {
   return score;
 }
 
+function getIntentScoreBoost(
+  stats: BandStats,
+  card: OpportunityCard,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+): number {
+  if (!chasing) {
+    return 0;
+  }
+
+  if (chasing === "dx") {
+    return (stats.offContinentSpots ?? 0) * 30 + Math.round((stats.maxDistanceKm ?? 0) / 350);
+  }
+
+  if (chasing === "pota") {
+    return countTaggedSpots(stats.spots, "POTA") * 160 - countPortableTaggedSpots(stats.spots) * 10;
+  }
+
+  if (chasing === "sota") {
+    return countTaggedSpots(stats.spots, "SOTA") * 180;
+  }
+
+  if (chasing === "portable") {
+    return stats.portableSpots * 90;
+  }
+
+  if (chasing === "digital") {
+    return stats.modeFamilyCounts.digital * 45;
+  }
+
+  return 0;
+}
+
+function getIntentDxBoost(
+  candidate: DxCandidate,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+): number {
+  if (!chasing) {
+    return 0;
+  }
+
+  if (chasing === "dx") {
+    return 0.24;
+  }
+
+  if (chasing === "digital" && candidate.card.tags.some((tag) => tag === "FT8" || tag === "FT4")) {
+    return 0.12;
+  }
+
+  if ((chasing === "pota" || chasing === "sota" || chasing === "portable") && candidate.card.portable) {
+    return -0.12;
+  }
+
+  return 0;
+}
+
 function countActiveModeFamilies(
   modeFamilyCounts: Readonly<Record<ModeFamilyKey, number>>,
 ): number {
   return (["cw", "phone", "digital"] as const).filter(
     (key) => modeFamilyCounts[key] > 0,
   ).length;
+}
+
+function countTaggedSpots(spots: readonly StoredOpportunitySpot[], tag: "POTA" | "SOTA"): number {
+  return spots.filter((spot) => spot.tags.includes(tag)).length;
+}
+
+function countPortableTaggedSpots(spots: readonly StoredOpportunitySpot[]): number {
+  return spots.filter((spot) => isPortableSpot(spot)).length;
 }
 
 function getConfidenceLevel(

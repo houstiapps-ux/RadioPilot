@@ -1,4 +1,4 @@
-import { lookupBand } from "./bands.js";
+import { resolveBand } from "./bands.js";
 import type { ParsedSpot, SpotTag } from "./types.js";
 
 const DX_LINE_PATTERN =
@@ -37,7 +37,7 @@ export function parseDxClusterLine(line: string): ParsedSpot | null {
     spotterCallsign: normalizedSpotter,
     spottedCallsign: normalizedSpotted,
     frequencyKHz,
-    band: lookupBand(frequencyKHz),
+    band: resolveBand(null, frequencyKHz),
     comment,
     tags: detectTags(comment),
   };

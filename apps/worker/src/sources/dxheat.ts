@@ -1,5 +1,5 @@
 import {
-  lookupBand,
+  resolveBand,
   type ParsedSpot,
   type ParsedSpotMode,
   type ParsedSpotModeFamily,
@@ -75,7 +75,7 @@ export function parseDxHeatRecord(record: DxHeatRecord): ParsedSpot | null {
     dxLocator: normalizeLocator(record.DXLocator),
     frequencyKHz,
     frequencyHz,
-    band: lookupBand(frequencyKHz),
+    band: resolveBand(null, frequencyKHz),
     observedAt,
     mode: mode.mode,
     modeFamily: mode.modeFamily,
