@@ -48,3 +48,25 @@ test("falls back to fetched time when source update is unavailable", () => {
     updatedAt: "2026-03-15T10:05:00.000Z",
   });
 });
+
+test("does not use unrelated source text as updatedAt", () => {
+  const parsed = parseSolarXml(
+    `
+      <solar>
+        <source>N0NBH</source>
+        <solarflux>133</solarflux>
+        <kindex>3</kindex>
+      </solar>
+    `,
+    "2026-03-15T10:05:00.000Z",
+  );
+
+  assert.deepEqual(parsed, {
+    sfi: 133,
+    kp: 3,
+    aIndex: undefined,
+    muf: undefined,
+    sunspots: undefined,
+    updatedAt: "2026-03-15T10:05:00.000Z",
+  });
+});

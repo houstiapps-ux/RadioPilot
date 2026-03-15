@@ -46,14 +46,23 @@ export function parseSolarXml(xml: string, fetchedAt: string): SolarConditions |
 }
 
 function readUpdatedAt(xml: string): string | undefined {
-  const sourceDate = readXmlValue(xml, ["source", "updated", "timestamp"]);
+  const sourceDate = readXmlValue(xml, [
+    "updated",
+    "timestamp",
+    "updatedat",
+    "updated_at",
+    "generated",
+    "generatedat",
+    "generated_at",
+    "date",
+  ]);
 
   if (!sourceDate) {
     return undefined;
   }
 
   const parsed = Date.parse(sourceDate);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : sourceDate;
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
 }
 
 function readXmlValue(xml: string, tagNames: readonly string[]): string | undefined {

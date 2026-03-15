@@ -98,9 +98,28 @@ app.get("/debug/recent-spots", async () => {
   return values.map((value) => parseJson(value) ?? value);
 });
 
-app.get("/debug/snapshot", async () => {
-  const rawSnapshot = await redis.get("snapshot:default");
-  return parseSnapshot(rawSnapshot);
+app.get("/debug/snapshot", async (request) => {
+  const homeGrid = getHomeGridFromQuery(request.query);
+  const operatingStyle = getOperatingStyleFromQuery(request.query);
+  const now = Date.now();
+  const [rawSpots, rawSolar] = await Promise.all([
+    redis.zRangeByScore("spots:recent", now - RECENT_WINDOW_MS * 2, now),
+    redis.get("solar:latest"),
+  ]);
+  const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
+  const solar = parseSolar(rawSolar);
+
+  if (spots.length === 0) {
+    return {
+      ...emptySnapshot(),
+      solar,
+    };
+  }
+
+  return {
+    ...buildOpportunitySnapshot(spots, { now, homeGrid, operatingStyle }),
+    solar,
+  };
 });
 
 app.get("/debug/solar", async () => {
