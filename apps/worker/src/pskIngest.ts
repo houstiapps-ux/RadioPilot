@@ -146,24 +146,42 @@ function normalizeReport(value: unknown): NormalizedPskReport | null {
   }
 
   const record = value as PskPayload;
+  const senderCallsign = getString(record, [
+    "sc",
+    "senderCallsign",
+    "txCallsign",
+    "sender",
+    "tx",
+    "deCall",
+  ]);
+  const receiverCallsign = getString(record, [
+    "rc",
+    "receiverCallsign",
+    "rxCallsign",
+    "receiver",
+    "rx",
+    "dxCall",
+  ]);
   const senderLocator = normalizeLocator(getString(record, [
+    "sl",
     "senderLocator",
     "txLocator",
     "txGrid",
     "deGrid",
   ]));
   const receiverLocator = normalizeLocator(getString(record, [
+    "rl",
     "receiverLocator",
     "rxLocator",
     "rxGrid",
     "dxGrid",
   ]));
 
-  if (!senderLocator || !receiverLocator) {
+  if (!senderCallsign || !receiverCallsign || !senderLocator || !receiverLocator) {
     return null;
   }
 
-  const mode = normalizeMode(getString(record, ["mode", "modeName", "digitalMode"]));
+  const mode = normalizeMode(getString(record, ["md", "mode", "modeName", "digitalMode"]));
   const frequencyHz = normalizeFrequencyHz(record);
 
   if (!mode || frequencyHz === null) {
@@ -187,7 +205,7 @@ function normalizeReport(value: unknown): NormalizedPskReport | null {
 }
 
 function normalizeTrackedBand(record: PskPayload, frequencyHz: number): TrackedBand | null {
-  const rawBand = getString(record, ["band"]);
+  const rawBand = getString(record, ["b", "band"]);
 
   if (rawBand) {
     return isTrackedBand(rawBand) ? rawBand : null;
@@ -198,7 +216,7 @@ function normalizeTrackedBand(record: PskPayload, frequencyHz: number): TrackedB
 }
 
 function normalizeFrequencyHz(record: PskPayload): number | null {
-  const value = getString(record, ["frequency", "frequencyHz", "freq"]);
+  const value = getString(record, ["f", "frequency", "frequencyHz", "freq"]);
 
   if (!value) {
     return null;

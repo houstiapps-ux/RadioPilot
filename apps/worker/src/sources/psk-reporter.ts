@@ -79,6 +79,7 @@ interface PskReporterDiagnosticsState {
   lastWatchdogWarningAt: number | null;
   lastWatchdogReceivedMessages: number;
   lastWatchdogParsedReports: number;
+  loggedFirstParsedReport: boolean;
 }
 
 type DirectionBucket = NonNullable<ReturnType<typeof estimatePathBetweenLocators>>["direction"];
@@ -119,6 +120,7 @@ export function startPskReporterMqttIngestion(
     lastWatchdogWarningAt: null,
     lastWatchdogReceivedMessages: 0,
     lastWatchdogParsedReports: 0,
+    loggedFirstParsedReport: false,
   };
   const flushTimer = setInterval(() => {
     void flushSummary(
@@ -275,6 +277,11 @@ async function handlePskReporterMessage(
 
   if (reports.length === 0) {
     return;
+  }
+
+  if (!diagnostics.loggedFirstParsedReport) {
+    diagnostics.loggedFirstParsedReport = true;
+    console.info("PSK Reporter first parsed report", JSON.stringify(reports[0]));
   }
 
   recentReports.push(...reports);
@@ -469,13 +476,13 @@ function normalizePskReporterRecord(value: unknown, discardReasons: string[] = [
 
   const record = value as PskReporterRecord;
   const senderCallsign = normalizeCallsign(
-    getString(record, ["txCallsign", "senderCallsign", "sender", "tx", "deCall"]),
+    getString(record, ["sc", "txCallsign", "senderCallsign", "sender", "tx", "deCall"]),
   );
   const receiverCallsign = normalizeCallsign(
-    getString(record, ["rxCallsign", "receiverCallsign", "receiver", "rx", "dxCall"]),
+    getString(record, ["rc", "rxCallsign", "receiverCallsign", "receiver", "rx", "dxCall"]),
   );
-  const senderLocator = normalizeGrid(getString(record, ["txGrid", "senderLocator", "txLocator", "deGrid"]));
-  const receiverLocator = normalizeGrid(getString(record, ["rxGrid", "receiverLocator", "rxLocator", "dxGrid"]));
+  const senderLocator = normalizeGrid(getString(record, ["sl", "txGrid", "senderLocator", "txLocator", "deGrid"]));
+  const receiverLocator = normalizeGrid(getString(record, ["rl", "rxGrid", "receiverLocator", "rxLocator", "dxGrid"]));
   const observedAt = normalizeObservedAt(record);
   const frequencyHz = normalizeFrequencyHz(record);
 
@@ -508,7 +515,7 @@ function normalizePskReporterRecord(value: unknown, discardReasons: string[] = [
   }
 
   const band = normalizeBand(record);
-  const mode = normalizeMode(getString(record, ["mode", "modeName", "digitalMode"]));
+  const mode = normalizeMode(getString(record, ["md", "mode", "modeName", "digitalMode"]));
 
   if (!supportedModes.has(mode)) {
     discardReasons.push(`unsupported_mode:${mode}`);
@@ -634,6 +641,10 @@ function getString(record: PskReporterRecord, keys: readonly string[]): string |
     if (typeof value === "string" && value.trim().length > 0) {
       return value.trim();
     }
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
   }
 
   return undefined;
@@ -667,14 +678,14 @@ function normalizeMode(value: string | undefined): string {
 }
 
 function normalizeBand(record: PskReporterRecord): PskReporterReport["band"] {
-  const bandValue = getString(record, ["band"]);
+  const bandValue = getString(record, ["b", "band"]);
 
   if (bandValue) {
     const normalizedBand = bandValue.trim() as Band;
     return supportedBands.includes(normalizedBand) ? normalizedBand : null;
   }
 
-  const frequencyValue = getString(record, ["frequency", "frequencyHz", "freq"]);
+  const frequencyValue = getString(record, ["f", "frequency", "frequencyHz", "freq"]);
 
   if (!frequencyValue) {
     return null;
@@ -691,7 +702,7 @@ function normalizeBand(record: PskReporterRecord): PskReporterReport["band"] {
 }
 
 function normalizeFrequencyHz(record: PskReporterRecord): number | undefined {
-  const frequencyValue = getString(record, ["frequency", "frequencyHz", "freq"]);
+  const frequencyValue = getString(record, ["f", "frequency", "frequencyHz", "freq"]);
 
   if (!frequencyValue) {
     return undefined;
@@ -707,7 +718,7 @@ function normalizeFrequencyHz(record: PskReporterRecord): number | undefined {
 }
 
 function normalizeObservedAt(record: PskReporterRecord): string | undefined {
-  const observedAt = getString(record, ["observedAt", "flowStartSeconds", "timestamp", "time"]);
+  const observedAt = getString(record, ["t_tx", "t", "observedAt", "flowStartSeconds", "timestamp", "time"]);
 
   if (!observedAt) {
     return undefined;

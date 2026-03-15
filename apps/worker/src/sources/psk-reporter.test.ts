@@ -34,6 +34,34 @@ test("normalizes generic psk reporter records", () => {
   });
 });
 
+test("normalizes documented mqtt.pskreporter.info payload shape", () => {
+  const parsed = parsePskReporterPayload({
+    sc: "SP2EWQ",
+    rc: "CU3AT",
+    sl: "JO93fn42",
+    rl: "HM68jp36",
+    f: 21074653,
+    md: "FT8",
+    t: 1662407712,
+    t_tx: 1662407697,
+    b: "15m",
+  });
+
+  assert.deepEqual(parsed, {
+    discardReasons: [],
+    reports: [{
+      observedAt: "2022-09-05T19:54:57.000Z",
+      frequencyHz: 21074653,
+      band: "15m",
+      mode: "FT8",
+      senderCallsign: "SP2EWQ",
+      senderLocator: "JO93FN42",
+      receiverCallsign: "CU3AT",
+      receiverLocator: "HM68JP36",
+    }],
+  });
+});
+
 test("builds rolling per-band counts, direction counts, and trend", () => {
   const now = Date.parse("2026-03-15T12:00:00.000Z");
   const summary = buildPskReporterSummary([
