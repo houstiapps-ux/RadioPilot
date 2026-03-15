@@ -704,7 +704,7 @@ function toOperatorView(card: OpportunityCard, tone: PanelTone): {
   tagItems: readonly string[];
 } {
   const directionLine = card.direction
-    ? formatDirectionWithConfidence(card.direction, card.directionConfidence)
+    ? formatDirectionWithArrow(card.direction, card.directionConfidence)
     : "Direction unavailable";
   const beamHeading = typeof card.bearing === "number" && Number.isFinite(card.bearing)
     ? `${Math.round(card.bearing)}°`
@@ -1000,6 +1000,40 @@ function formatDirectionWithConfidence(
   const shortDirection = formatDirectionShort(direction);
 
   return directionConfidence ? `${shortDirection} · ${directionConfidence}` : shortDirection;
+}
+
+function formatDirectionWithArrow(
+  direction: string,
+  directionConfidence: OpportunityCard["directionConfidence"],
+): string {
+  const shortDirection = formatDirectionShort(direction);
+  const directionArrow = getDirectionArrow(shortDirection);
+  const directionLabel = directionArrow ? `${directionArrow} ${shortDirection}` : shortDirection;
+
+  return directionConfidence ? `${directionLabel} · ${directionConfidence}` : directionLabel;
+}
+
+function getDirectionArrow(direction: string): string {
+  switch (direction.trim().toUpperCase()) {
+    case "N":
+      return "↑";
+    case "NE":
+      return "↗";
+    case "E":
+      return "→";
+    case "SE":
+      return "↘";
+    case "S":
+      return "↓";
+    case "SW":
+      return "↙";
+    case "W":
+      return "←";
+    case "NW":
+      return "↖";
+    default:
+      return "";
+  }
 }
 
 function formatOperatorSummary(summary: string | undefined, fallback: string): string {
