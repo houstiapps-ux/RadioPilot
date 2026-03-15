@@ -42,9 +42,10 @@ const dxHost = process.env.DX_CLUSTER_HOST ?? "ei7mre.ath.cx";
 const dxPort = Number(process.env.DX_CLUSTER_PORT ?? 7300);
 const dxCallsign = process.env.DX_CLUSTER_CALLSIGN ?? "EI5JEB";
 const spotSource = process.env.SPOT_SOURCE ?? "dxheat";
-// Local development should use the public Railway Redis URL from the repo root .env.
-// Railway deployments should set REDIS_URL to the Redis private endpoint in Railway service variables.
-const redisUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
+const redisUrl =
+  process.env.REDIS_PRIVATE_URL ||
+  process.env.REDIS_URL ||
+  "redis://127.0.0.1:6379";
 const logLevel = process.env.LOG_LEVEL ?? "info";
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS ?? 30_000);
 const solarPollIntervalMs = 10 * 60 * 1000;
@@ -63,6 +64,11 @@ let reconnectTimer: NodeJS.Timeout | undefined;
 
 console.info("Connecting to Redis");
 await redis.connect();
+if (process.env.REDIS_PRIVATE_URL) {
+  console.info("Using Railway private Redis connection");
+} else {
+  console.info("Using public Redis connection");
+}
 console.info("Redis connected");
 startSnapshotLoop(redis);
 startSolarPolling();
