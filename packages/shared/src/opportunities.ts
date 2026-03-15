@@ -1467,10 +1467,7 @@ function getConfidenceReason(
   return "Fresh spots but limited PSK support";
 }
 
-function buildConfidenceExplanation(
-  stats: BandStats,
-  solar: SolarConditions | null,
-): {
+interface ConfidenceExplanation {
   confidence: "Low" | "Medium" | "High";
   confidenceReason: string;
   evidenceFlags: {
@@ -1479,7 +1476,18 @@ function buildConfidenceExplanation(
     solar: boolean;
   };
   supportChips: readonly string[];
-} {
+}
+
+interface ConfidenceAuditInput extends ConfidenceExplanation {
+  clusterStrong: boolean;
+  pskStrong: boolean;
+  directionConfidence: "High" | "Medium" | "Low";
+}
+
+function buildConfidenceExplanation(
+  stats: BandStats,
+  solar: SolarConditions | null,
+): ConfidenceExplanation {
   const muf = getSolarMuf(solar);
   const clusterStrong = stats.totalSpots >= 10 || stats.uniqueCallsigns >= 7;
   const clusterPresent = stats.totalSpots >= 4 || stats.uniqueCallsigns >= 4;
@@ -1504,7 +1512,7 @@ function buildConfidenceExplanation(
     confidenceReason = "Activity good, path less certain";
   }
 
-  return {
+  return auditConfidenceExplanation({
     confidence,
     confidenceReason,
     evidenceFlags: {
@@ -1512,7 +1520,59 @@ function buildConfidenceExplanation(
       psk: pskPresent,
       solar: solarSupported,
     },
+    clusterStrong,
+    pskStrong,
+    directionConfidence,
     supportChips: [formatPathSupportChip(directionConfidence)],
+  });
+}
+
+export function auditConfidenceExplanation(
+  input: ConfidenceAuditInput,
+): ConfidenceExplanation {
+  let confidence = input.confidence;
+  let confidenceReason = input.confidenceReason;
+  const evidenceFlags = input.evidenceFlags;
+  const supportChips = [formatPathSupportChip(input.directionConfidence)];
+  const evidenceCount = Number(evidenceFlags.cluster) + Number(evidenceFlags.psk) + Number(evidenceFlags.solar);
+
+  if (evidenceFlags.psk && /limited psk support/i.test(confidenceReason)) {
+    confidenceReason = "Path confirmed, but activity still light";
+  }
+
+  if (
+    confidence === "High" &&
+    evidenceCount === 0 &&
+    /(cluster|psk|solar|support)/i.test(confidenceReason)
+  ) {
+    confidence = "Low";
+    confidenceReason = "Limited evidence so far";
+  }
+
+  if (confidence === "Low" && evidenceFlags.cluster && evidenceFlags.psk && evidenceFlags.solar) {
+    confidence = "High";
+    confidenceReason = input.clusterStrong && input.pskStrong
+      ? "Cluster and PSK agree"
+      : "Cluster and PSK align";
+  } else if (confidence === "Low" && evidenceFlags.cluster && evidenceFlags.psk) {
+    confidence = "Medium";
+    confidenceReason = "Cluster and PSK align";
+  }
+
+  if (
+    confidenceReason === "Activity good, path less certain" &&
+    input.directionConfidence === "High" &&
+    evidenceFlags.cluster &&
+    evidenceFlags.psk
+  ) {
+    confidenceReason = "Cluster and PSK align";
+  }
+
+  return {
+    confidence,
+    confidenceReason,
+    evidenceFlags,
+    supportChips,
   };
 }
 

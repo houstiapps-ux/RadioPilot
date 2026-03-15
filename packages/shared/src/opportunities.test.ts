@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  auditConfidenceExplanation,
   buildOpportunitySnapshot,
   buildOpportunitySnapshotWithDebug,
   parseStoredOpportunitySpot,
@@ -269,6 +270,66 @@ test("keeps confidence reason and evidence flags aligned when PSK is present", (
   assert.equal(snapshot.bestOpportunity?.evidenceFlags?.psk, true);
   assert.equal(snapshot.bestOpportunity?.confidenceReason, "Path confirmed, but activity still light");
   assert.deepEqual(snapshot.bestOpportunity?.supportChips, ["Path weak"]);
+});
+
+test("audits contradictory PSK wording into a consistent confidence reason", () => {
+  const audited = auditConfidenceExplanation({
+    confidence: "Medium",
+    confidenceReason: "Fresh spots but limited PSK support",
+    evidenceFlags: {
+      cluster: true,
+      psk: true,
+      solar: false,
+    },
+    clusterStrong: false,
+    pskStrong: false,
+    directionConfidence: "Low",
+    supportChips: ["Path weak"],
+  });
+
+  assert.equal(audited.confidence, "Medium");
+  assert.equal(audited.confidenceReason, "Path confirmed, but activity still light");
+  assert.deepEqual(audited.supportChips, ["Path weak"]);
+});
+
+test("audits weak evidence away from unsupported high confidence", () => {
+  const audited = auditConfidenceExplanation({
+    confidence: "High",
+    confidenceReason: "Cluster and PSK agree",
+    evidenceFlags: {
+      cluster: false,
+      psk: false,
+      solar: false,
+    },
+    clusterStrong: false,
+    pskStrong: false,
+    directionConfidence: "Low",
+    supportChips: ["Path strong"],
+  });
+
+  assert.equal(audited.confidence, "Low");
+  assert.equal(audited.confidenceReason, "Limited evidence so far");
+  assert.deepEqual(audited.supportChips, ["Path weak"]);
+});
+
+test("audits strong agreement away from unsupported low confidence", () => {
+  const audited = auditConfidenceExplanation({
+    confidence: "Low",
+    confidenceReason: "Limited evidence so far",
+    evidenceFlags: {
+      cluster: true,
+      psk: true,
+      solar: true,
+    },
+    clusterStrong: true,
+    pskStrong: true,
+    directionConfidence: "High",
+    supportChips: ["Path weak"],
+  });
+
+  assert.equal(audited.confidence, "High");
+  assert.equal(audited.confidenceReason, "Cluster and PSK agree");
+  assert.deepEqual(audited.supportChips, ["Path strong"]);
 });
 
 test("prefers a rarer DX candidate over duplicating best opportunity", () => {
