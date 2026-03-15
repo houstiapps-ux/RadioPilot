@@ -28,13 +28,13 @@ const FILTER_CACHE_REFRESH_MS = 5_000;
 const FILTER_CACHE_MAX_STALE_MS = 30_000;
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "0.0.0.0";
-const redisUrl =
-  process.env.REDIS_PRIVATE_URL ||
-  process.env.REDIS_URL ||
-  "redis://127.0.0.1:6379";
+const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 
 const app = Fastify({ logger: false });
 const redis = createClient({ url: redisUrl });
+redis.on("error", (err) => {
+  console.error("Redis error", err);
+});
 const opportunityStorage = new RedisOpportunityStorage(redis);
 
 let cachedOpportunityInputs:
@@ -56,11 +56,6 @@ const emptySnapshot = (): OpportunitySnapshot => ({
 });
 
 await redis.connect();
-if (process.env.REDIS_PRIVATE_URL) {
-  console.info("Using Railway private Redis connection");
-} else {
-  console.info("Using public Redis connection");
-}
 
 app.addHook("onRequest", async (request, reply) => {
   reply.header("Access-Control-Allow-Origin", "http://localhost:5173");

@@ -42,10 +42,7 @@ const dxHost = process.env.DX_CLUSTER_HOST ?? "ei7mre.ath.cx";
 const dxPort = Number(process.env.DX_CLUSTER_PORT ?? 7300);
 const dxCallsign = process.env.DX_CLUSTER_CALLSIGN ?? "EI5JEB";
 const spotSource = process.env.SPOT_SOURCE ?? "dxheat";
-const redisUrl =
-  process.env.REDIS_PRIVATE_URL ||
-  process.env.REDIS_URL ||
-  "redis://127.0.0.1:6379";
+const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 const logLevel = process.env.LOG_LEVEL ?? "info";
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS ?? 30_000);
 const solarPollIntervalMs = 10 * 60 * 1000;
@@ -57,6 +54,9 @@ const reconnectBaseDelayMs = 1_000;
 const reconnectMaxDelayMs = 30_000;
 
 const redis = createClient({ url: redisUrl });
+redis.on("error", (err) => {
+  console.error("Redis error", err);
+});
 const recentTelnetSpotFingerprints = new Map<string, number>();
 
 let reconnectDelayMs = reconnectBaseDelayMs;
@@ -64,11 +64,6 @@ let reconnectTimer: NodeJS.Timeout | undefined;
 
 console.info("Connecting to Redis");
 await redis.connect();
-if (process.env.REDIS_PRIVATE_URL) {
-  console.info("Using Railway private Redis connection");
-} else {
-  console.info("Using public Redis connection");
-}
 console.info("Redis connected");
 startSnapshotLoop(redis);
 startSolarPolling();

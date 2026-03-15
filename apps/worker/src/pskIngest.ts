@@ -44,21 +44,16 @@ const initialBandActivity = (): BandActivity => ({
 });
 
 async function main(): Promise<void> {
-  const redisUrl =
-    process.env.REDIS_PRIVATE_URL ||
-    process.env.REDIS_URL ||
-    "redis://127.0.0.1:6379";
+  const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
   const redis = createClient({ url: redisUrl });
+  redis.on("error", (err) => {
+    console.error("Redis error", err);
+  });
   const bandActivity = initialBandActivity();
   let lastMessageAt: string | null = null;
 
   console.info(`PSK ingest connecting to Redis at ${redactRedisUrl(redisUrl)}`);
   await redis.connect();
-  if (process.env.REDIS_PRIVATE_URL) {
-    console.info("Using Railway private Redis connection");
-  } else {
-    console.info("Using public Redis connection");
-  }
   console.info("PSK ingest Redis connected");
 
   const client = mqtt.connect(mqttUrl, {
