@@ -14,6 +14,7 @@ import { calculatePathStability } from "./pathStability.js";
 import type {
   BandPredictionMap,
   OpportunityCard,
+  OpportunityScoreBreakdown,
   OpportunitySnapshot,
   ParsedSpot,
   PropagationDensityMap,
@@ -95,6 +96,7 @@ export interface OpportunityDebugDxCandidate {
   readonly entity?: string;
   readonly eventType?: string;
   readonly band: string;
+  readonly scoreBreakdown: OpportunityScoreBreakdown;
   readonly activityScore: number;
   readonly rarityScore: number;
   readonly eventScore: number;
@@ -104,10 +106,20 @@ export interface OpportunityDebugDxCandidate {
   readonly signals: readonly string[];
 }
 
+export interface OpportunityDebugCandidate {
+  readonly callsign: string;
+  readonly band: string;
+  readonly cardType: "best" | "watch";
+  readonly filterMatchLabels: readonly string[];
+  readonly scoreBreakdown: OpportunityScoreBreakdown;
+}
+
 export interface OpportunityDebugSnapshot {
   readonly snapshot: OpportunitySnapshot;
   readonly bands: readonly OpportunityDebugBand[];
+  readonly candidates: readonly OpportunityDebugCandidate[];
   readonly dxCandidates: readonly OpportunityDebugDxCandidate[];
+  readonly nearbyCandidates: ReturnType<typeof findNearbyOpportunities>["candidates"];
   readonly bandResolution: {
     readonly sourceBandMissing: number;
     readonly frequencyDerivedBandUsed: number;
@@ -121,6 +133,13 @@ interface DirectionalEstimate extends PathEstimate {
   readonly callsign: string;
 }
 type DirectionBucket = PathEstimate["direction"];
+interface RankedBandCandidate {
+  readonly representative: StoredOpportunitySpot;
+  readonly stats: BandStats;
+  readonly card: OpportunityCard;
+  readonly filterMatchLabels: readonly string[];
+  readonly scoreBreakdown: OpportunityScoreBreakdown;
+}
 
 export function buildOpportunitySnapshot(
   allSpots: readonly StoredOpportunitySpot[],
@@ -172,7 +191,7 @@ export function buildOpportunitySnapshotWithDebug(
   const eligibleStats = statsByBand.filter((stats) =>
     matchesOpportunityFilters(stats, normalizedModeFilter, normalizedBandScope)
   );
-  const rankedBands = eligibleStats
+  const rankedBands: RankedBandCandidate[] = eligibleStats
     .map((stats) => {
       const representative = selectRepresentativeSpotForFilters(
         stats,
@@ -180,16 +199,31 @@ export function buildOpportunitySnapshotWithDebug(
         normalizedModeFilter,
         normalizedHomeContinent ?? null,
       );
+      const card = createOpportunityCard(
+        stats,
+        representative,
+        normalizedHomeGrid,
+        solar,
+        now,
+      );
 
       return {
         representative,
         stats,
-        card: createOpportunityCard(
+        card,
+        filterMatchLabels: buildFilterMatchLabels(
           stats,
           representative,
-          normalizedHomeGrid,
-          solar,
-          now,
+          normalizedChasing,
+          normalizedModeFilter,
+          normalizedBandScope,
+          normalizedHomeContinent ?? null,
+        ),
+        scoreBreakdown: buildOpportunityScoreBreakdown(
+          stats,
+          card,
+          normalizedOperatingStyle,
+          normalizedChasing,
         ),
       };
     })
@@ -204,8 +238,14 @@ export function buildOpportunitySnapshotWithDebug(
       ),
     );
   const intentRankedBands = preferBandsForChasing(rankedBands, normalizedChasing);
-  const rankedCards = intentRankedBands.map(({ card }, index) =>
-    withCardType(card, index === 0 ? "best" : "watch")
+  const rankedCards = intentRankedBands.map(({ card, filterMatchLabels }, index) =>
+    withCardType(
+      {
+        ...card,
+        filterMatchLabels,
+      },
+      index === 0 ? "best" : "watch",
+    )
   );
   const nearby = findNearbyOpportunities(
     { homeGrid: normalizedHomeGrid },
@@ -255,8 +295,18 @@ export function buildOpportunitySnapshotWithDebug(
     watchNext: watchNextBands
       .filter(({ card }) => card.id !== (rankedCards[0]?.id ?? ""))
       .slice(0, 3)
-      .map(({ card }) => withCardType(card, "watch")),
-    dxOpportunity: dxOpportunity ? withCardType(dxOpportunity, "dx") : null,
+      .map(({ card, filterMatchLabels }) => withCardType({ ...card, filterMatchLabels }, "watch")),
+    dxOpportunity: dxOpportunity
+      ? withCardType({
+        ...dxOpportunity,
+        filterMatchLabels: buildCardFilterMatchLabels(
+          dxOpportunity,
+          normalizedChasing,
+          normalizedModeFilter,
+          normalizedBandScope,
+        ),
+      }, "dx")
+      : null,
     nearbyActivity: filterNearbyCards(
       nearby.cards,
       normalizedChasing,
@@ -274,11 +324,19 @@ export function buildOpportunitySnapshotWithDebug(
       pskBoostApplied: stats.pskBandBoostApplied || stats.pskModeBoostApplied,
       pskTrend: stats.pskTrendLabel,
     })),
+    candidates: rankedBands.map(({ card, filterMatchLabels, scoreBreakdown }, index) => ({
+      callsign: card.callsign,
+      band: card.band ?? "unknown",
+      cardType: index === 0 ? "best" : "watch",
+      filterMatchLabels,
+      scoreBreakdown,
+    })),
     dxCandidates: dxCandidates.map((candidate) => ({
       callsign: candidate.card.callsign,
       entity: candidate.entity,
       eventType: candidate.eventType,
       band: candidate.card.band ?? "unknown",
+      scoreBreakdown: candidate.scoreBreakdown,
       activityScore: roundDebugScore(candidate.activityScore),
       rarityScore: roundDebugScore(candidate.rarityScore),
       eventScore: roundDebugScore(candidate.eventScore),
@@ -287,6 +345,7 @@ export function buildOpportunitySnapshotWithDebug(
       finalDxScore: roundDebugScore(candidate.dxScore),
       signals: candidate.signals,
     })),
+    nearbyCandidates: nearby.candidates,
     bandResolution: {
       sourceBandMissing: 0,
       frequencyDerivedBandUsed: 0,
@@ -929,11 +988,11 @@ function buildDxCandidates(
 
   return statsByBand
     .flatMap((stats) =>
-      buildBandDxCandidates(stats, homeContinent, homeGrid, dxRarity, dxEventsByCallsign, solar),
+      buildBandDxCandidates(stats, homeContinent, homeGrid, dxRarity, dxEventsByCallsign, solar, chasing),
     )
     .sort((left, right) => {
-      const rightTotal = right.dxScore + getIntentDxBoost(right, chasing);
-      const leftTotal = left.dxScore + getIntentDxBoost(left, chasing);
+      const rightTotal = right.dxScore + getIntentDxBoost(right.card, chasing);
+      const leftTotal = left.dxScore + getIntentDxBoost(left.card, chasing);
 
       if (rightTotal !== leftTotal) {
         return rightTotal - leftTotal;
@@ -968,6 +1027,7 @@ function buildBandDxCandidates(
   dxRarity?: DxRarityContext | null,
   dxEventsByCallsign?: ReadonlyMap<string, DxEventCandidate>,
   solar?: SolarConditions | null,
+  chasing?: "dx" | "pota" | "sota" | "portable" | "digital",
 ): readonly DxCandidate[] {
   const latestByCallsign = new Map<string, StoredOpportunitySpot>();
 
@@ -1005,6 +1065,12 @@ function buildBandDxCandidates(
         dxEvent ? "Currently workable path" : undefined,
       ].filter((value): value is string => typeof value === "string"),
     );
+    const userPreferenceScore = getIntentDxBoost(baseCard, chasing);
+    const scoreBreakdown = buildDxScoreBreakdown(
+      scored,
+      eventScore,
+      userPreferenceScore,
+    );
 
     return {
       card: {
@@ -1018,6 +1084,7 @@ function buildBandDxCandidates(
       },
       entity,
       eventType: dxEvent?.eventType,
+      scoreBreakdown,
       activityScore: scored.activityScore,
       rarityScore: scored.rarityScore,
       eventScore,
@@ -1827,9 +1894,9 @@ function filterNearbyCards(
 }
 
 function preferBandsForChasing(
-  rankedBands: readonly { stats: BandStats; card: OpportunityCard }[],
+  rankedBands: readonly RankedBandCandidate[],
   chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
-): readonly { stats: BandStats; card: OpportunityCard }[] {
+): readonly RankedBandCandidate[] {
   if (!chasing) {
     return rankedBands;
   }
@@ -1886,6 +1953,80 @@ function matchesChasingCardPreference(
   }
 
   return !card.regional;
+}
+
+function buildFilterMatchLabels(
+  stats: BandStats,
+  representative: StoredOpportunitySpot,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+  modeFilter: "ssb" | "cw" | "digital" | undefined,
+  bandScope: "hf" | "vhf-uhf" | undefined,
+  homeContinent: string | null,
+): readonly string[] {
+  const labels: string[] = [];
+
+  if (chasing) {
+    if (chasing === "dx") {
+      const continentDx = normalizeContinent(representative.continentDx);
+
+      if (homeContinent && continentDx && continentDx !== homeContinent) {
+        labels.push("DX");
+      }
+    } else if (chasing === "pota" && representative.tags.includes("POTA")) {
+      labels.push("POTA");
+    } else if (chasing === "sota" && representative.tags.includes("SOTA")) {
+      labels.push("SOTA");
+    } else if (chasing === "portable" && isPortableSpot(representative)) {
+      labels.push("Portable");
+    } else if (chasing === "digital" && normalizeModeFamily(representative.modeFamily) === "digital") {
+      labels.push("Digital");
+    }
+  }
+
+  if (modeFilter === "ssb" && normalizeModeFamily(representative.modeFamily) === "phone") {
+    labels.push("SSB");
+  } else if (modeFilter === "cw" && normalizeModeFamily(representative.modeFamily) === "cw") {
+    labels.push("CW");
+  } else if (modeFilter === "digital" && normalizeModeFamily(representative.modeFamily) === "digital") {
+    labels.push("Digital");
+  }
+
+  if (bandScope === "hf" && matchesBandScope(stats.bandKey, "hf")) {
+    labels.push("HF");
+  } else if (bandScope === "vhf-uhf" && matchesBandScope(stats.bandKey, "vhf-uhf")) {
+    labels.push("VHF/UHF");
+  }
+
+  return labels;
+}
+
+function buildCardFilterMatchLabels(
+  card: OpportunityCard,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+  modeFilter: "ssb" | "cw" | "digital" | undefined,
+  bandScope: "hf" | "vhf-uhf" | undefined,
+): readonly string[] {
+  const labels: string[] = [];
+
+  if (chasing && matchesChasingCardPreference(card, chasing)) {
+    labels.push(chasing === "dx" ? "DX" : chasing === "pota" ? "POTA" : chasing === "sota" ? "SOTA" : chasing === "portable" ? "Portable" : "Digital");
+  }
+
+  if (modeFilter === "ssb" && matchesCardFilters(card, "ssb", undefined)) {
+    labels.push("SSB");
+  } else if (modeFilter === "cw" && matchesCardFilters(card, "cw", undefined)) {
+    labels.push("CW");
+  } else if (modeFilter === "digital" && matchesCardFilters(card, "digital", undefined)) {
+    labels.push("Digital");
+  }
+
+  if (bandScope === "hf" && matchesBandScope(card.band ?? "unknown", "hf")) {
+    labels.push("HF");
+  } else if (bandScope === "vhf-uhf" && matchesBandScope(card.band ?? "unknown", "vhf-uhf")) {
+    labels.push("VHF/UHF");
+  }
+
+  return labels;
 }
 
 function scoreNearbyIntentCard(
@@ -1971,6 +2112,57 @@ function scoreCard(
   operatingStyle: "dx" | undefined,
   chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
 ): number {
+  return getOpportunityTotalScore(stats, card, operatingStyle, chasing);
+}
+
+function buildOpportunityScoreBreakdown(
+  stats: BandStats,
+  card: OpportunityCard,
+  operatingStyle: "dx" | undefined,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+): OpportunityScoreBreakdown {
+  const activityScore = card.score;
+  const pathScore =
+    (stats.offContinentSpots ?? 0) * 40 +
+    stats.dominantDirectionUniqueCallsigns * 20 +
+    Math.max(stats.directionSpread, 0) * 15 +
+    getPropagationScoreBoost(stats);
+  const trendScore = getPskScoreBoost(stats);
+  const modeFitScore = countActiveModeFamilies(stats.modeFamilyCounts) * 12;
+  const userPreferenceScore = getIntentScoreBoost(stats, card, chasing);
+  let operatingStyleScore = 0;
+
+  if (operatingStyle === "dx") {
+    if (stats.offContinentSpots !== null) {
+      operatingStyleScore += stats.offContinentSpots * 60;
+    }
+
+    if (stats.maxDistanceKm !== null) {
+      operatingStyleScore += Math.round(stats.maxDistanceKm / 250);
+    }
+  }
+
+  const totalScore = getOpportunityTotalScore(stats, card, operatingStyle, chasing);
+
+  return {
+    activityScore: roundDebugScore(activityScore),
+    pathScore: roundDebugScore(pathScore),
+    trendScore: roundDebugScore(trendScore),
+    modeFitScore: roundDebugScore(modeFitScore),
+    solarScore: 0,
+    rarityScore: 0,
+    userPreferenceScore: roundDebugScore(userPreferenceScore),
+    operatingStyleScore: operatingStyleScore > 0 ? roundDebugScore(operatingStyleScore) : undefined,
+    totalScore: roundDebugScore(totalScore),
+  };
+}
+
+function getOpportunityTotalScore(
+  stats: BandStats,
+  card: OpportunityCard,
+  operatingStyle: "dx" | undefined,
+  chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
+): number {
   let score = card.score;
 
   if (stats.offContinentSpots !== null) {
@@ -1996,6 +2188,24 @@ function scoreCard(
   score += getIntentScoreBoost(stats, card, chasing);
 
   return score;
+}
+
+function buildDxScoreBreakdown(
+  scored: ReturnType<typeof scoreDxCandidate>,
+  eventScore: number,
+  userPreferenceScore: number,
+): OpportunityScoreBreakdown {
+  return {
+    activityScore: roundDebugScore(scored.activityScore),
+    pathScore: roundDebugScore(scored.pathScore),
+    trendScore: 0,
+    modeFitScore: 0,
+    solarScore: roundDebugScore(scored.solarScore),
+    rarityScore: roundDebugScore(scored.rarityScore),
+    userPreferenceScore: roundDebugScore(userPreferenceScore),
+    dxEventScore: roundDebugScore(eventScore),
+    totalScore: roundDebugScore(scored.dxScore + userPreferenceScore),
+  };
 }
 
 function getPropagationScoreBoost(stats: BandStats): number {
@@ -2071,7 +2281,7 @@ function getIntentScoreBoost(
 }
 
 function getIntentDxBoost(
-  candidate: DxCandidate,
+  card: OpportunityCard,
   chasing: "dx" | "pota" | "sota" | "portable" | "digital" | undefined,
 ): number {
   if (!chasing) {
@@ -2082,11 +2292,11 @@ function getIntentDxBoost(
     return 0.24;
   }
 
-  if (chasing === "digital" && candidate.card.tags.some((tag) => tag === "FT8" || tag === "FT4")) {
+  if (chasing === "digital" && card.tags.some((tag) => tag === "FT8" || tag === "FT4")) {
     return 0.12;
   }
 
-  if ((chasing === "pota" || chasing === "sota" || chasing === "portable") && candidate.card.portable) {
+  if ((chasing === "pota" || chasing === "sota" || chasing === "portable") && card.portable) {
     return -0.12;
   }
 
@@ -2247,6 +2457,7 @@ interface DxCandidate {
   readonly card: OpportunityCard;
   readonly entity?: string;
   readonly eventType?: string;
+  readonly scoreBreakdown: OpportunityScoreBreakdown;
   readonly activityScore: number;
   readonly rarityScore: number;
   readonly eventScore: number;

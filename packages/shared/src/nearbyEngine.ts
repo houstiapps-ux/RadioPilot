@@ -1,6 +1,6 @@
 import { distanceKm as gridDistanceKm } from "./geo.js";
 import { estimatePathBetweenLocators, parseMaidenheadLocator } from "./maidenhead.js";
-import type { OpportunityCard, ParsedSpot } from "./types.js";
+import type { OpportunityCard, OpportunityScoreBreakdown, ParsedSpot } from "./types.js";
 
 const MAX_NEARBY_DISTANCE_KM = 2_500;
 const LOCAL_DISTANCE_KM = 300;
@@ -21,6 +21,7 @@ export interface NearbyCandidateDebug {
   readonly portableType: "SOTA" | "POTA" | "Portable" | null;
   readonly band: string;
   readonly score: number;
+  readonly scoreBreakdown: OpportunityScoreBreakdown;
 }
 
 export interface NearbyResult {
@@ -124,6 +125,17 @@ export function findNearbyOpportunities(
           portableType,
           band: spot.band,
           score: Math.round(totalScore * 100) / 100,
+          scoreBreakdown: {
+            activityScore: roundScore(activityScore),
+            pathScore: roundScore(distanceScore),
+            trendScore: roundScore(freshness),
+            modeFitScore: roundScore(bandSuitability),
+            solarScore: 0,
+            rarityScore: 0,
+            userPreferenceScore: 0,
+            nearbyScore: roundScore(portableBoost),
+            totalScore: roundScore(totalScore),
+          },
         },
       }];
     })
@@ -135,6 +147,10 @@ export function findNearbyOpportunities(
     cards: dedupedCards,
     candidates: nearbyCandidates.slice(0, 10).map((candidate) => candidate.debug),
   };
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function buildCallCounts(spots: readonly NearbySpot[]): ReadonlyMap<string, number> {

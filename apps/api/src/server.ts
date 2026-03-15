@@ -493,7 +493,9 @@ async function buildPersonalizedSnapshotDebug(
     return {
       snapshot: empty,
       bands: [],
+      candidates: [],
       dxCandidates: [],
+      nearbyCandidates: [],
       bandResolution,
     };
   }

@@ -51,6 +51,7 @@ export interface OpportunityCard {
     readonly solar: boolean;
   };
   readonly supportChips?: readonly string[];
+  readonly filterMatchLabels?: readonly string[];
   readonly activityLevel?: "High" | "Moderate" | "Low";
   readonly bandState?: "Opening" | "Stable" | "Fading";
   readonly freshnessSeconds?: number;
@@ -65,6 +66,20 @@ export interface OpportunityCard {
   readonly regional?: boolean;
   readonly tags: readonly SpotTag[];
   readonly score: number;
+}
+
+export interface OpportunityScoreBreakdown {
+  readonly activityScore: number;
+  readonly pathScore: number;
+  readonly trendScore: number;
+  readonly modeFitScore: number;
+  readonly solarScore: number;
+  readonly rarityScore: number;
+  readonly userPreferenceScore: number;
+  readonly operatingStyleScore?: number;
+  readonly nearbyScore?: number;
+  readonly dxEventScore?: number;
+  readonly totalScore: number;
 }
 
 export interface SolarConditions {
