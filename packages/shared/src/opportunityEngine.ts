@@ -1,5 +1,6 @@
 import type { Band } from "./bands.js";
 import { predictAllBands } from "./bandPredictor.js";
+import { detectDxEvents, type DxEventCandidate } from "./dxEvents.js";
 import { getAllBandPathDensities } from "./pathDensity.js";
 import {
   deriveContinentFromMaidenhead,
@@ -64,10 +65,13 @@ export interface OpportunityEngineCard {
   readonly beamHeading: number;
   readonly confidence: "High" | "Medium" | "Low";
   readonly directionConfidence?: "High" | "Medium" | "Low";
+  readonly dxEventType?: string;
+  readonly rarityScore?: number;
   readonly bandState?: "Opening" | "Stable" | "Fading";
   readonly trendLabel?: "Rising" | "Steady" | "Falling";
   readonly signals?: readonly string[];
   readonly why?: readonly string[];
+  readonly actionLine?: string;
   readonly callsign?: string;
   readonly frequency?: number;
   readonly entity?: string;
@@ -84,6 +88,7 @@ export interface OpportunityEngineResult {
 export interface OpportunityRedisClient {
   get(key: string): Promise<string | null>;
   zRangeByScore(key: string, min: number, max: number): Promise<string[]>;
+  hGet?(key: string, field: string): Promise<string | null>;
 }
 
 interface CandidateEvidence {
@@ -107,9 +112,11 @@ interface CandidateEvidence {
   readonly reason: readonly string[];
   readonly signals: readonly string[];
   readonly why: readonly string[];
+  readonly actionLine?: string;
   readonly bandState: "Opening" | "Stable" | "Fading";
   readonly trendLabel: "Rising" | "Steady" | "Falling";
   readonly directionConfidence: "High" | "Medium" | "Low";
+  readonly dxEventType?: string;
   readonly offContinent: boolean;
   readonly portable: boolean;
   readonly nearbyDistanceKm?: number;
@@ -162,6 +169,8 @@ export async function generateOpportunities(
     const observedAt = getSpotTimestamp(spot);
     return observedAt >= previousWindowStart && observedAt < currentWindowStart;
   });
+  const dxEvents = await loadDxEvents(currentSpots, redisClient, now);
+  const dxEventsByCallsign = new Map(dxEvents.map((event) => [event.callsign, event] as const));
   const candidates = supportedBands
     .map((band) => buildBandCandidate(
       band,
@@ -169,6 +178,7 @@ export async function generateOpportunities(
       previousSpots,
       state,
       normalizedProfile,
+      dxEventsByCallsign,
     ))
     .flatMap((candidate) => candidate ? [candidate] : [])
     .sort((left, right) => right.totalScore - left.totalScore);
@@ -178,7 +188,7 @@ export async function generateOpportunities(
   return {
     bestOpportunity: toCard(bestCandidate),
     watchNext: toCard(selectWatchNext(candidates, bestCandidate)),
-    dxOpportunity: toCard(selectDxOpportunity(candidates, bestCandidate)),
+    dxOpportunity: toCard(selectDxOpportunity(candidates, bestCandidate, normalizedProfile)),
     nearbyActivity: toCard(selectNearbyActivity(currentSpots, normalizedProfile, state.solar)),
   };
 }
@@ -211,6 +221,26 @@ async function loadRedisState(redisClient: OpportunityRedisClient): Promise<Load
     bandPredictions,
     pathDensities,
   };
+}
+
+async function loadDxEvents(
+  spots: readonly StoredOpportunitySpot[],
+  redisClient: OpportunityRedisClient,
+  now: number,
+): Promise<readonly DxEventCandidate[]> {
+  if (typeof redisClient.hGet !== "function") {
+    return [];
+  }
+
+  return detectDxEvents(spots, {
+    hGet: redisClient.hGet.bind(redisClient),
+    async hIncrBy() {
+      return 0;
+    },
+    async expire() {
+      return 1;
+    },
+  }, now);
 }
 
 async function loadDirectionalCounts(
@@ -246,6 +276,7 @@ function buildBandCandidate(
   previousSpots: readonly StoredOpportunitySpot[],
   state: LoadedRedisState,
   userProfile: NormalizedUserProfile,
+  dxEventsByCallsign: ReadonlyMap<string, DxEventCandidate>,
 ): CandidateEvidence | null {
   const currentBandSpots = currentSpots.filter((spot) => spot.band === band);
   const previousBandSpots = previousSpots.filter((spot) => spot.band === band);
@@ -276,6 +307,7 @@ function buildBandCandidate(
   const beamHeading = inferBeamHeading(userProfile.homeGrid, representative, direction, context);
   const mode = inferMode(representative, context, userProfile.modePreference);
   const offContinent = isOffContinent(representative, userProfile.homeContinent);
+  const dxEvent = dxEventsByCallsign.get(representative.spottedCallsign.trim().toUpperCase());
   const activityScore = scoreActivity(context);
   const pathScore = scorePath(context, representative, userProfile, direction);
   const trendScore = scoreTrend(context);
@@ -311,11 +343,13 @@ function buildBandCandidate(
     totalScore,
     confidence: deriveConfidence(activityScore, pathScore, trendScore, solarScore, context),
     reason: buildReasonList(context, representative, mode, direction, offContinent, state.solar, userProfile),
-    signals: buildSignals(context, representative, mode, direction),
-    why: buildWhy(context, representative, mode, offContinent, state.solar),
+    signals: buildSignals(context, representative, mode, direction, dxEvent),
+    why: buildWhy(context, representative, mode, offContinent, state.solar, dxEvent),
+    actionLine: buildDxActionLine(band, direction, beamHeading, representative.frequencyKHz, dxEvent),
     bandState: toBandState(context.bandPrediction),
     trendLabel: toTrendLabel(context.bandPrediction, context),
     directionConfidence: context.pathDensity?.confidence ?? "Low",
+    dxEventType: dxEvent?.eventType,
     offContinent,
     portable: isPortable(representative.tags),
   };
@@ -346,21 +380,28 @@ function selectWatchNext(
 function selectDxOpportunity(
   candidates: readonly CandidateEvidence[],
   bestCandidate: CandidateEvidence | null,
+  userProfile: NormalizedUserProfile,
 ): CandidateEvidence | null {
-  const dxCandidate = candidates
-    .filter((candidate) => candidate.offContinent || candidate.rarityScore >= 45)
+  const ranked = candidates
+    .filter((candidate) => candidate.offContinent || candidate.rarityScore >= 45 || candidate.dxEventType)
     .sort((left, right) => {
-      const leftDxScore = left.pathScore + left.rarityScore + left.userPreferenceScore;
-      const rightDxScore = right.pathScore + right.rarityScore + right.userPreferenceScore;
+      const leftDxScore = scoreDxOpportunityCandidate(left, userProfile);
+      const rightDxScore = scoreDxOpportunityCandidate(right, userProfile);
 
       if (rightDxScore !== leftDxScore) {
         return rightDxScore - leftDxScore;
       }
 
       return right.totalScore - left.totalScore;
-    })[0];
+    });
 
-  return dxCandidate ?? candidates.find((candidate) => candidate.band !== bestCandidate?.band) ?? null;
+  for (const candidate of ranked) {
+    if (!isDuplicateDxCandidate(candidate, bestCandidate)) {
+      return candidate;
+    }
+  }
+
+  return ranked[0] ?? candidates.find((candidate) => candidate.band !== bestCandidate?.band) ?? null;
 }
 
 function selectNearbyActivity(
@@ -450,6 +491,9 @@ function selectNearbyActivity(
             distanceKm !== null ? `${Math.round(distanceKm)} km from station` : "Regional station",
             "Good fit for nearby work",
           ],
+        actionLine: portable
+          ? `Call nearby portable on ${spot.band}`
+          : `Regional activity on ${spot.band}`,
         bandState: "Stable" as const,
         trendLabel: "Steady" as const,
         directionConfidence: "Low" as const,
@@ -473,10 +517,13 @@ function toCard(candidate: CandidateEvidence | null): OpportunityEngineCard | nu
     beamHeading: candidate.beamHeading,
     confidence: candidate.confidence,
     directionConfidence: candidate.directionConfidence,
+    dxEventType: candidate.dxEventType,
+    rarityScore: roundScore(candidate.rarityScore / 100),
     bandState: candidate.bandState,
     trendLabel: candidate.trendLabel,
     signals: candidate.signals,
     why: candidate.why,
+    actionLine: candidate.actionLine,
     callsign: candidate.callsign,
     frequency: candidate.frequency,
     entity: candidate.entity,
@@ -737,6 +784,7 @@ function buildSignals(
   representative: StoredOpportunitySpot,
   mode: string,
   direction: (typeof directionOrder)[number],
+  dxEvent: DxEventCandidate | undefined,
 ): readonly string[] {
   const signals: string[] = [];
 
@@ -778,6 +826,14 @@ function buildSignals(
     signals.push("Portable nearby");
   }
 
+  if (dxEvent) {
+    for (const signal of dxEvent.signals) {
+      if (!signals.includes(signal)) {
+        signals.push(signal);
+      }
+    }
+  }
+
   return signals.slice(0, 5);
 }
 
@@ -787,6 +843,7 @@ function buildWhy(
   mode: string,
   offContinent: boolean,
   solar: SolarConditions | null,
+  dxEvent: DxEventCandidate | undefined,
 ): readonly string[] {
   const why = [`${context.currentSpots.length} recent spots on ${context.band}`];
   const uniqueCallsigns = new Set(context.currentSpots.map((spot) => spot.spottedCallsign)).size;
@@ -820,7 +877,32 @@ function buildWhy(
     why.push("Digital path supported");
   }
 
+  if (dxEvent?.eventType) {
+    why.push(dxEvent.eventType);
+  }
+
   return why.slice(0, 5);
+}
+
+function buildDxActionLine(
+  band: Band,
+  direction: (typeof directionOrder)[number],
+  beamHeading: number,
+  frequencyKHz: number,
+  dxEvent: DxEventCandidate | undefined,
+): string {
+  const shortDirection = shortDirectionLabel(direction);
+  const frequencyMHz = (frequencyKHz / 1000).toFixed(3);
+
+  if (dxEvent?.eventType === "Possible DXpedition") {
+    return `Point beam ${shortDirection} and listen around ${frequencyMHz} MHz`;
+  }
+
+  if (dxEvent?.eventType === "Rare DX active") {
+    return `Try rare DX on ${band} toward ${shortDirection}`;
+  }
+
+  return `Work ${band} toward ${shortDirection} (${Math.round(beamHeading)}°)`;
 }
 
 function deriveConfidence(
@@ -948,6 +1030,75 @@ function scoreWatchNextCandidate(
   score -= Math.min(18, clusterGap * 0.12);
 
   return score;
+}
+
+function scoreDxOpportunityCandidate(
+  candidate: CandidateEvidence,
+  userProfile: NormalizedUserProfile,
+): number {
+  const activityScore = candidate.activityScore / 100;
+  const rarityScore = candidate.rarityScore / 100;
+  const eventScore = scoreDxEventStrength(candidate);
+  const pathScore = candidate.pathScore / 100;
+  const solarScore = candidate.solarScore / 100;
+  let score =
+    0.28 * activityScore +
+    0.28 * rarityScore +
+    0.22 * eventScore +
+    0.14 * pathScore +
+    0.08 * solarScore;
+
+  if (candidate.directionConfidence === "High") {
+    score += 0.08;
+  } else if (candidate.directionConfidence === "Medium") {
+    score += 0.04;
+  }
+
+  if (candidate.offContinent && userProfile.operatingStyle === "dx") {
+    score += 0.06;
+  }
+
+  return score;
+}
+
+function scoreDxEventStrength(candidate: CandidateEvidence): number {
+  if (candidate.dxEventType === "Possible DXpedition") {
+    return 1;
+  }
+
+  if (candidate.dxEventType === "Rare DX active") {
+    return 0.85;
+  }
+
+  if (candidate.dxEventType === "Multi-band DX activity") {
+    return 0.7;
+  }
+
+  if (candidate.dxEventType === "High spotter interest") {
+    return 0.6;
+  }
+
+  return candidate.signals.includes("Rare DX active") ? 0.55 : 0.2;
+}
+
+function isDuplicateDxCandidate(
+  candidate: CandidateEvidence,
+  bestCandidate: CandidateEvidence | null,
+): boolean {
+  if (!bestCandidate) {
+    return false;
+  }
+
+  const sameCallsign = candidate.callsign === bestCandidate.callsign;
+  const sameBand = candidate.band === bestCandidate.band;
+  const sameFrequency = Math.abs((candidate.frequency ?? 0) - (bestCandidate.frequency ?? 0)) <= 10;
+  const strongDxEvidence = candidate.rarityScore >= 90 || scoreDxEventStrength(candidate) >= 0.85;
+
+  if (sameCallsign && sameBand && sameFrequency && !strongDxEvidence) {
+    return true;
+  }
+
+  return false;
 }
 
 function inferDirection(
@@ -1082,6 +1233,10 @@ function directionLabel(direction: (typeof directionOrder)[number]): string {
   return labels[direction];
 }
 
+function shortDirectionLabel(direction: (typeof directionOrder)[number]): string {
+  return direction;
+}
+
 function toBandState(
   prediction: BandPrediction | null,
 ): "Opening" | "Stable" | "Fading" {
@@ -1199,4 +1354,8 @@ function emptyDirectionCounts(): Record<(typeof directionOrder)[number], number>
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 100) / 100;
 }

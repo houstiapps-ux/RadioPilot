@@ -6,6 +6,7 @@ import Fastify from "fastify";
 import {
   predictBandOpenings,
   buildOpportunitySnapshotWithDebug,
+  detectDxEvents,
   findNearbyOpportunities,
   getDirectionalPropagation,
   loadDxRarityContext,
@@ -91,6 +92,13 @@ app.get("/debug/snapshot", async (request) => {
 
 app.get("/debug/opportunities", async (request) => {
   return buildPersonalizedSnapshotDebug(request.query);
+});
+
+app.get("/debug/dx", async (request) => {
+  const built = await buildPersonalizedSnapshotDebug(request.query, "debug-opportunities");
+  return {
+    dxCandidates: built.dxCandidates,
+  };
 });
 
 app.get("/debug/solar", async () => {
@@ -444,6 +452,7 @@ async function buildPersonalizedSnapshotDebug(
   ]);
   const spots = rawSpots.flatMap(parseStoredOpportunitySpot);
   const dxRarity = await loadDxRarityContext(redis, spots, now);
+  const dxEvents = await detectDxEvents(spots, redis, now);
   const solar = parseSolar(rawSolar);
   const pskSummary = parsePskSummary(rawPsk);
   const spotsWithDxLocator = spots.filter((spot) => typeof spot.dxLocator === "string").length;
@@ -475,6 +484,7 @@ async function buildPersonalizedSnapshotDebug(
     pskSummary: isFreshPskSummary(pskSummary, now) ? pskSummary : null,
     pskTrends: filterFreshPskTrends(pskTrends, now),
     dxRarity,
+    dxEvents,
     solar,
     bandPredictions,
     propagationDensity,

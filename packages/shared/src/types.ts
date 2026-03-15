@@ -29,6 +29,7 @@ export interface OpportunityCard {
   readonly cardType?: "best" | "watch" | "dx" | "nearby";
   readonly callsign: string;
   readonly entity?: string;
+  readonly dxEventType?: string;
   readonly band: Band | null;
   readonly frequencyKHz: number;
   readonly frequencyMhz?: string;

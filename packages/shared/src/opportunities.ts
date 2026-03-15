@@ -1,3 +1,4 @@
+import { type DxEventCandidate } from "./dxEvents.js";
 import {
   scoreDxCandidate,
   type DxRarityContext,
@@ -28,6 +29,7 @@ interface BuildOpportunitySnapshotOptions {
   readonly pskSummary?: PskReporterSummary | null;
   readonly pskTrends?: PskBandTrendMap | null;
   readonly dxRarity?: DxRarityContext | null;
+  readonly dxEvents?: readonly DxEventCandidate[] | null;
   readonly solar?: SolarConditions | null;
   readonly bandPredictions?: BandPredictionMap | null;
   readonly propagationDensity?: PropagationDensityMap | null;
@@ -86,12 +88,15 @@ export interface OpportunityDebugBand {
 export interface OpportunityDebugDxCandidate {
   readonly callsign: string;
   readonly entity?: string;
+  readonly eventType?: string;
   readonly band: string;
   readonly activityScore: number;
   readonly rarityScore: number;
+  readonly eventScore: number;
   readonly pathScore: number;
   readonly solarScore: number;
-  readonly dxScore: number;
+  readonly finalDxScore: number;
+  readonly signals: readonly string[];
 }
 
 export interface OpportunityDebugSnapshot {
@@ -129,6 +134,7 @@ export function buildOpportunitySnapshotWithDebug(
   const pskByBand = indexPskSummaryByBand(options.pskSummary);
   const pskTrends = options.pskTrends ?? {};
   const dxRarity = options.dxRarity ?? null;
+  const dxEvents = options.dxEvents ?? [];
   const solar = options.solar ?? null;
   const bandPredictions = options.bandPredictions ?? {};
   const propagationDensity = options.propagationDensity ?? {};
@@ -190,6 +196,7 @@ export function buildOpportunitySnapshotWithDebug(
     normalizedHomeContinent ?? null,
     normalizedHomeGrid,
     dxRarity,
+    dxEvents,
     solar,
   );
   const dxOpportunity = selectDxOpportunityCard(
@@ -222,12 +229,15 @@ export function buildOpportunitySnapshotWithDebug(
     dxCandidates: dxCandidates.map((candidate) => ({
       callsign: candidate.card.callsign,
       entity: candidate.entity,
+      eventType: candidate.eventType,
       band: candidate.card.band ?? "unknown",
       activityScore: roundDebugScore(candidate.activityScore),
       rarityScore: roundDebugScore(candidate.rarityScore),
+      eventScore: roundDebugScore(candidate.eventScore),
       pathScore: roundDebugScore(candidate.pathScore),
       solarScore: roundDebugScore(candidate.solarScore),
-      dxScore: roundDebugScore(candidate.dxScore),
+      finalDxScore: roundDebugScore(candidate.dxScore),
+      signals: candidate.signals,
     })),
   };
 }
@@ -724,10 +734,17 @@ function buildDxCandidates(
   homeContinent: string | null,
   homeGrid: string | undefined,
   dxRarity: DxRarityContext | null,
+  dxEvents: readonly DxEventCandidate[],
   solar: SolarConditions | null,
 ): readonly DxCandidate[] {
+  const dxEventsByCallsign = new Map(
+    dxEvents.map((candidate) => [candidate.callsign.trim().toUpperCase(), candidate] as const),
+  );
+
   return statsByBand
-    .flatMap((stats) => buildBandDxCandidates(stats, homeContinent, homeGrid, dxRarity, solar))
+    .flatMap((stats) =>
+      buildBandDxCandidates(stats, homeContinent, homeGrid, dxRarity, dxEventsByCallsign, solar),
+    )
     .sort((left, right) => {
       if (right.dxScore !== left.dxScore) {
         return right.dxScore - left.dxScore;
@@ -760,6 +777,7 @@ function buildBandDxCandidates(
   homeContinent: string | null,
   homeGrid?: string,
   dxRarity?: DxRarityContext | null,
+  dxEventsByCallsign?: ReadonlyMap<string, DxEventCandidate>,
   solar?: SolarConditions | null,
 ): readonly DxCandidate[] {
   const latestByCallsign = new Map<string, StoredOpportunitySpot>();
@@ -774,9 +792,10 @@ function buildBandDxCandidates(
 
   return [...latestByCallsign.values()].map((representative) => {
     const entity = representative.countryCode ?? representative.continentDx;
+    const dxEvent = dxEventsByCallsign?.get(representative.spottedCallsign.trim().toUpperCase());
     const activityScore = scoreDxActivity(stats, representative);
     const pathScore = scoreDxPath(stats, representative, homeContinent, homeGrid);
-      const solarScore = scoreDxSolar(stats.bandKey, solar ?? null);
+    const solarScore = scoreDxSolar(stats.bandKey, solar ?? null);
     const scored = scoreDxCandidate(
       {
         callsign: representative.spottedCallsign,
@@ -788,19 +807,35 @@ function buildBandDxCandidates(
       dxRarity,
     );
     const baseCard = createOpportunityCard(stats, representative, homeGrid);
+    const eventScore = getDxEventStrength(dxEvent);
+    const signals = mergeDistinctStrings(baseCard.signals ?? [], dxEvent?.signals ?? []);
+    const why = mergeDistinctStrings(
+      baseCard.why ?? [],
+      [
+        dxEvent?.eventType,
+        dxEvent ? "Currently workable path" : undefined,
+      ].filter((value): value is string => typeof value === "string"),
+    );
 
     return {
       card: {
         ...baseCard,
+        dxEventType: dxEvent?.eventType,
         summary: `${baseCard.summary}, ${buildDxReasonSummary(representative.spottedCallsign, entity, scored.rarityScore, activityScore)}`,
         score: Math.round(baseCard.score + scored.dxScore * 100),
+        signals,
+        why,
+        actionLine: buildDxActionLine(baseCard, dxEvent),
       },
       entity,
+      eventType: dxEvent?.eventType,
       activityScore: scored.activityScore,
       rarityScore: scored.rarityScore,
+      eventScore,
       pathScore: scored.pathScore,
       solarScore: scored.solarScore,
       dxScore: scored.dxScore,
+      signals,
     };
   });
 }
@@ -1672,11 +1707,67 @@ interface PskBandSummary {
 interface DxCandidate {
   readonly card: OpportunityCard;
   readonly entity?: string;
+  readonly eventType?: string;
   readonly activityScore: number;
   readonly rarityScore: number;
+  readonly eventScore: number;
   readonly pathScore: number;
   readonly solarScore: number;
   readonly dxScore: number;
+  readonly signals: readonly string[];
+}
+
+function getDxEventStrength(dxEvent: DxEventCandidate | undefined): number {
+  if (!dxEvent) {
+    return 0;
+  }
+
+  switch (dxEvent.eventType) {
+    case "Possible DXpedition":
+      return 0.88;
+    case "Rare DX active":
+      return 0.82;
+    case "Multi-band DX activity":
+      return 0.72;
+    case "High spotter interest":
+      return 0.66;
+    default:
+      return 0.5;
+  }
+}
+
+function mergeDistinctStrings(
+  left: readonly string[],
+  right: readonly string[],
+): readonly string[] {
+  const merged: string[] = [];
+
+  for (const value of [...left, ...right]) {
+    if (value.length > 0 && !merged.includes(value)) {
+      merged.push(value);
+    }
+  }
+
+  return merged.slice(0, 6);
+}
+
+function buildDxActionLine(
+  baseCard: OpportunityCard,
+  dxEvent: DxEventCandidate | undefined,
+): string {
+  const band = baseCard.band ?? "HF";
+  const direction = baseCard.direction ?? "the strongest path";
+  const frequency = baseCard.frequencyMhz ?? formatFrequencyMhz(baseCard.frequencyKHz);
+
+  if (dxEvent?.eventType === "Possible DXpedition") {
+    return `Listen for DXpedition activity on ${band} around ${frequency}`;
+  }
+
+  if (dxEvent?.eventType === "Rare DX active") {
+    return `Try rare DX toward ${direction} on ${band}`;
+  }
+
+  return baseCard.actionLine ?? `Check ${band} around ${frequency}`;
 }
 
 function indexPskSummaryByBand(

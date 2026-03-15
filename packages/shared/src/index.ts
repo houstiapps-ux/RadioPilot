@@ -1,6 +1,7 @@
 export * from "./activations.js";
 export * from "./bandPredictor.js";
 export * from "./bands.js";
+export * from "./dxEvents.js";
 export * from "./dxRarity.js";
 export * from "./geo.js";
 export * from "./maidenhead.js";

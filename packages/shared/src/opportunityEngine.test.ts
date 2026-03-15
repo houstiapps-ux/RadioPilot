@@ -28,6 +28,8 @@ test("generates four operator cards from Redis-backed signals", async () => {
   assert.ok(result.watchNext?.bandState);
   assert.ok(result.watchNext?.signals?.length);
   assert.ok(result.dxOpportunity);
+  assert.notEqual(result.dxOpportunity?.callsign, result.bestOpportunity?.callsign);
+  assert.ok(result.dxOpportunity?.actionLine);
   assert.ok(result.nearbyActivity);
 });
 
