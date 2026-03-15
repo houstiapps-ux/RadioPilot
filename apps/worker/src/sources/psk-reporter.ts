@@ -15,6 +15,7 @@ const defaultMqttUrl = "mqtt://mqtt.pskreporter.info";
 const reconnectPeriodMs = 5_000;
 const diagnosticsIntervalMs = 5_000;
 const mockReportIntervalMs = 200;
+const parserWatchdogWindowMs = 60_000;
 
 type PskReporterRecord = Record<string, unknown>;
 const supportedBands: readonly Band[] = [
@@ -53,6 +54,13 @@ interface PskReporterMqttOptions {
 
 export interface PskReporterWorkerMetrics {
   readonly mqttConnected: boolean;
+  readonly parserHealthy: boolean;
+  readonly messagesReceived: number;
+  readonly reportsParsed: number;
+  readonly reportsRetained: number;
+  readonly malformedMessages: number;
+  readonly droppedReports: Readonly<Record<string, number>>;
+  readonly lastReportSecondsAgo: number | null;
   readonly messagesLast10s: number;
   readonly updatedAt: string;
 }
@@ -64,6 +72,13 @@ interface PskReporterDiagnosticsState {
   dirtySummary: boolean;
   mqttConnected: boolean;
   recentMessageTimes: number[];
+  sampledMessages: number;
+  discardReasons: Record<string, number>;
+  parserHealthy: boolean;
+  parserAnomalySince: number | null;
+  lastWatchdogWarningAt: number | null;
+  lastWatchdogReceivedMessages: number;
+  lastWatchdogParsedReports: number;
 }
 
 type DirectionBucket = NonNullable<ReturnType<typeof estimatePathBetweenLocators>>["direction"];
@@ -97,6 +112,13 @@ export function startPskReporterMqttIngestion(
     dirtySummary: false,
     mqttConnected: false,
     recentMessageTimes: [] as number[],
+    sampledMessages: 0,
+    discardReasons: {},
+    parserHealthy: true,
+    parserAnomalySince: null,
+    lastWatchdogWarningAt: null,
+    lastWatchdogReceivedMessages: 0,
+    lastWatchdogParsedReports: 0,
   };
   const flushTimer = setInterval(() => {
     void flushSummary(
@@ -118,6 +140,7 @@ export function startPskReporterMqttIngestion(
       const payload = Buffer.from(JSON.stringify(generateMockPskPayload()), "utf8");
       void handlePskReporterMessage(
         payload,
+        "mock://psk",
         recentReports,
         diagnostics,
         directionalAggregation,
@@ -169,9 +192,10 @@ export function startPskReporterMqttIngestion(
       options.onDiagnostic?.("psk-close", { mqttUrl });
     });
 
-    client.on("message", (_topic, payload) => {
+    client.on("message", (topic, payload) => {
       void handlePskReporterMessage(
         payload,
+        topic,
         recentReports,
         diagnostics,
         directionalAggregation,
@@ -197,6 +221,7 @@ export function startPskReporterMqttIngestion(
 
 async function handlePskReporterMessage(
   payload: Buffer,
+  topic: string,
   recentReports: PskReporterReport[],
   diagnostics: PskReporterDiagnosticsState,
   directionalAggregation: DirectionalAggregationState,
@@ -205,20 +230,48 @@ async function handlePskReporterMessage(
 ): Promise<void> {
   diagnostics.receivedMessages += 1;
   diagnostics.recentMessageTimes.push(Date.now());
+  const shouldSample = diagnostics.sampledMessages < 5;
+
+  if (shouldSample) {
+    diagnostics.sampledMessages += 1;
+    options.onDiagnostic?.("psk-sample-message", {
+      sampleIndex: diagnostics.sampledMessages,
+      topic,
+      payloadBytes: payload.byteLength,
+      utf8Preview: payload.toString("utf8").slice(0, 240),
+      hexPreview: payload.subarray(0, 64).toString("hex"),
+    });
+  }
+
   let parsedPayload: unknown;
 
   try {
     parsedPayload = JSON.parse(payload.toString("utf8")) as unknown;
   } catch (error) {
     diagnostics.malformedMessages += 1;
+    incrementDiscardReason(diagnostics, "json_parse_failed");
     options.onDiagnostic?.("psk-malformed-message", {
       error: error instanceof Error ? error.message : String(error),
+      topic,
       preview: payload.toString("utf8").slice(0, 120),
     });
     return;
   }
 
-  const reports = parsePskReporterPayload(parsedPayload);
+  const { reports, discardReasons } = parsePskReporterPayload(parsedPayload);
+
+  for (const reason of discardReasons) {
+    incrementDiscardReason(diagnostics, reason);
+  }
+
+  if (shouldSample) {
+    options.onDiagnostic?.("psk-sample-parser-output", {
+      topic,
+      reportCount: reports.length,
+      discardReasons,
+      reportsPreview: reports.slice(0, 2),
+    });
+  }
 
   if (reports.length === 0) {
     return;
@@ -243,15 +296,24 @@ async function flushSummary(
   const now = Date.now();
   pruneReports(recentReports, now, windowMinutes);
   pruneRecentMessageTimes(diagnostics.recentMessageTimes, now);
+  updateParserWatchdog(diagnostics, now, options);
 
   options.onDiagnostic?.("psk-message-stats", {
     receivedMessages: diagnostics.receivedMessages,
     parsedReports: diagnostics.parsedReports,
     malformedMessages: diagnostics.malformedMessages,
     retainedReports: recentReports.length,
+    discardReasons: diagnostics.discardReasons,
   });
   await options.onMetrics?.({
     mqttConnected: diagnostics.mqttConnected,
+    parserHealthy: diagnostics.parserHealthy,
+    messagesReceived: diagnostics.receivedMessages,
+    reportsParsed: diagnostics.parsedReports,
+    reportsRetained: recentReports.length,
+    malformedMessages: diagnostics.malformedMessages,
+    droppedReports: buildDroppedReports(diagnostics.discardReasons),
+    lastReportSecondsAgo: getLastReportSecondsAgo(recentReports, now),
     messagesLast10s: diagnostics.recentMessageTimes.length,
     updatedAt: new Date(now).toISOString(),
   });
@@ -266,6 +328,16 @@ async function flushSummary(
   }
 
   const summary = buildPskReporterSummary(recentReports, now, windowMinutes);
+  const hasParsedReports =
+    diagnostics.parsedReports > 0 &&
+    summary.bands.some((band) => band.currentWindowCount > 0 || band.previousWindowCount > 0);
+
+  if (!hasParsedReports) {
+    console.warn("PSK summary update skipped due to zero parsed reports");
+    diagnostics.dirtySummary = false;
+    return;
+  }
+
   await options.onSummary(summary);
   diagnostics.dirtySummary = false;
   options.onDiagnostic?.("psk-summary-flush", {
@@ -275,21 +347,39 @@ async function flushSummary(
   });
 }
 
-export function parsePskReporterPayload(payload: unknown): PskReporterReport[] {
+export function parsePskReporterPayload(payload: unknown): {
+  reports: PskReporterReport[];
+  discardReasons: string[];
+} {
   if (Array.isArray(payload)) {
-    return payload.flatMap((value) => normalizePskReporterRecord(value));
+    const discardReasons: string[] = [];
+    return {
+      reports: payload.flatMap((value) => normalizePskReporterRecord(value, discardReasons)),
+      discardReasons,
+    };
   }
 
   if (typeof payload === "object" && payload !== null) {
     const records = Reflect.get(payload, "reports");
     if (Array.isArray(records)) {
-      return records.flatMap((value) => normalizePskReporterRecord(value));
+      const discardReasons: string[] = [];
+      return {
+        reports: records.flatMap((value) => normalizePskReporterRecord(value, discardReasons)),
+        discardReasons,
+      };
     }
 
-    return normalizePskReporterRecord(payload);
+    const discardReasons: string[] = [];
+    return {
+      reports: normalizePskReporterRecord(payload, discardReasons),
+      discardReasons,
+    };
   }
 
-  return [];
+  return {
+    reports: [],
+    discardReasons: ["payload_not_array_or_object"],
+  };
 }
 
 export function buildPskReporterTopics(): string[] {
@@ -371,8 +461,9 @@ export function buildPskReporterSummary(
   };
 }
 
-function normalizePskReporterRecord(value: unknown): PskReporterReport[] {
+function normalizePskReporterRecord(value: unknown, discardReasons: string[] = []): PskReporterReport[] {
   if (typeof value !== "object" || value === null) {
+    discardReasons.push("record_not_object");
     return [];
   }
 
@@ -388,6 +479,30 @@ function normalizePskReporterRecord(value: unknown): PskReporterReport[] {
   const observedAt = normalizeObservedAt(record);
   const frequencyHz = normalizeFrequencyHz(record);
 
+  if (!senderCallsign) {
+    discardReasons.push("missing_sender_callsign");
+  }
+
+  if (!receiverCallsign) {
+    discardReasons.push("missing_receiver_callsign");
+  }
+
+  if (!senderLocator) {
+    discardReasons.push("missing_sender_locator");
+  }
+
+  if (!receiverLocator) {
+    discardReasons.push("missing_receiver_locator");
+  }
+
+  if (!observedAt) {
+    discardReasons.push("missing_observed_at");
+  }
+
+  if (!frequencyHz) {
+    discardReasons.push("missing_frequency_hz");
+  }
+
   if (!senderCallsign || !receiverCallsign || !senderLocator || !receiverLocator || !observedAt || !frequencyHz) {
     return [];
   }
@@ -396,10 +511,12 @@ function normalizePskReporterRecord(value: unknown): PskReporterReport[] {
   const mode = normalizeMode(getString(record, ["mode", "modeName", "digitalMode"]));
 
   if (!supportedModes.has(mode)) {
+    discardReasons.push(`unsupported_mode:${mode}`);
     return [];
   }
 
   if (!band || !supportedBands.includes(band)) {
+    discardReasons.push(`unsupported_band:${band ?? "unknown"}`);
     return [];
   }
 
@@ -413,6 +530,102 @@ function normalizePskReporterRecord(value: unknown): PskReporterReport[] {
     receiverCallsign,
     receiverLocator,
   }];
+}
+
+function incrementDiscardReason(
+  diagnostics: PskReporterDiagnosticsState,
+  reason: string,
+): void {
+  diagnostics.discardReasons[reason] = (diagnostics.discardReasons[reason] ?? 0) + 1;
+}
+
+function updateParserWatchdog(
+  diagnostics: PskReporterDiagnosticsState,
+  now: number,
+  options: Pick<PskReporterMqttOptions, "onDiagnostic">,
+): void {
+  const receivedDelta = diagnostics.receivedMessages - diagnostics.lastWatchdogReceivedMessages;
+  const parsedDelta = diagnostics.parsedReports - diagnostics.lastWatchdogParsedReports;
+
+  diagnostics.lastWatchdogReceivedMessages = diagnostics.receivedMessages;
+  diagnostics.lastWatchdogParsedReports = diagnostics.parsedReports;
+
+  if (receivedDelta > 0 && parsedDelta === 0) {
+    if (diagnostics.parserAnomalySince === null) {
+      diagnostics.parserAnomalySince = now;
+    }
+
+    if (now - diagnostics.parserAnomalySince >= parserWatchdogWindowMs) {
+      diagnostics.parserHealthy = false;
+
+      if (
+        diagnostics.lastWatchdogWarningAt === null ||
+        now - diagnostics.lastWatchdogWarningAt >= parserWatchdogWindowMs
+      ) {
+        diagnostics.lastWatchdogWarningAt = now;
+        console.warn("PSK ingestion anomaly: messages arriving but no reports parsed");
+        options.onDiagnostic?.("psk-parser-anomaly", {
+          messagesReceived: diagnostics.receivedMessages,
+          reportsParsed: diagnostics.parsedReports,
+          anomalySeconds: Math.round((now - diagnostics.parserAnomalySince) / 1000),
+        });
+      }
+    }
+
+    return;
+  }
+
+  if (parsedDelta > 0 || receivedDelta <= 0) {
+    diagnostics.parserHealthy = true;
+    diagnostics.parserAnomalySince = null;
+  }
+}
+
+function buildDroppedReports(
+  discardReasons: Readonly<Record<string, number>>,
+): Readonly<Record<string, number>> {
+  return {
+    missingLocator:
+      (discardReasons.missing_sender_locator ?? 0) +
+      (discardReasons.missing_receiver_locator ?? 0),
+    unknownBand:
+      sumDiscardReasonsWithPrefix(discardReasons, "unsupported_band:"),
+    unsupportedMode:
+      sumDiscardReasonsWithPrefix(discardReasons, "unsupported_mode:"),
+    invalidObservedAt: discardReasons.missing_observed_at ?? 0,
+    invalidFrequency: discardReasons.missing_frequency_hz ?? 0,
+    invalidCallsign:
+      (discardReasons.missing_sender_callsign ?? 0) +
+      (discardReasons.missing_receiver_callsign ?? 0),
+    invalidPayload:
+      (discardReasons.json_parse_failed ?? 0) +
+      (discardReasons.payload_not_array_or_object ?? 0) +
+      (discardReasons.record_not_object ?? 0),
+  };
+}
+
+function sumDiscardReasonsWithPrefix(
+  discardReasons: Readonly<Record<string, number>>,
+  prefix: string,
+): number {
+  return Object.entries(discardReasons).reduce((total, [reason, count]) =>
+    reason.startsWith(prefix) ? total + count : total, 0);
+}
+
+function getLastReportSecondsAgo(
+  reports: readonly PskReporterReport[],
+  now: number,
+): number | null {
+  const lastObservedAtMs = reports.reduce((latest, report) => {
+    const observedAtMs = Date.parse(report.observedAt);
+    return Number.isFinite(observedAtMs) && observedAtMs > latest ? observedAtMs : latest;
+  }, Number.NEGATIVE_INFINITY);
+
+  if (!Number.isFinite(lastObservedAtMs)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((now - lastObservedAtMs) / 1000));
 }
 
 function getString(record: PskReporterRecord, keys: readonly string[]): string | undefined {

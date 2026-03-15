@@ -9,7 +9,7 @@ import {
 } from "./psk-reporter.js";
 
 test("normalizes generic psk reporter records", () => {
-  const reports = parsePskReporterPayload({
+  const parsed = parsePskReporterPayload({
     senderCallsign: "ea8abc",
     receiverCallsign: "ei2test",
     senderLocator: "IL18",
@@ -19,7 +19,9 @@ test("normalizes generic psk reporter records", () => {
     flowStartSeconds: "1773572100",
   });
 
-  assert.deepEqual(reports, [{
+  assert.deepEqual(parsed, {
+    discardReasons: [],
+    reports: [{
     observedAt: "2026-03-15T10:55:00.000Z",
     frequencyHz: 14074000,
     band: "20m",
@@ -28,7 +30,8 @@ test("normalizes generic psk reporter records", () => {
     senderLocator: "IL18",
     receiverCallsign: "EI2TEST",
     receiverLocator: "IO63UI",
-  }]);
+    }],
+  });
 });
 
 test("builds rolling per-band counts, direction counts, and trend", () => {

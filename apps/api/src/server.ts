@@ -111,8 +111,16 @@ app.get("/debug/psk", async () => {
 
   return {
     mqttConnected: metrics?.mqttConnected ?? false,
+    parserHealthy: metrics?.parserHealthy ?? true,
+    messagesReceived: metrics?.messagesReceived ?? 0,
+    reportsParsed: metrics?.reportsParsed ?? 0,
+    reportsRetained: metrics?.reportsRetained ?? 0,
+    malformedMessages: metrics?.malformedMessages ?? 0,
+    droppedReports: metrics?.droppedReports ?? {},
+    lastReportSecondsAgo: metrics?.lastReportSecondsAgo ?? null,
     messagesLast10s: metrics?.messagesLast10s ?? 0,
-    activeBands: getActivePskBands(summary),
+    bandsActive: getActivePskBands(summary),
+    directionsActive: getActivePskDirections(summary),
     lastRedisWriteSecondsAgo,
     summary: summary ?? {},
     freshness,
@@ -221,6 +229,13 @@ function parsePskSummary(value: string | null): PskReporterSummary | null {
 
 function parsePskMetrics(value: string | null): {
   mqttConnected: boolean;
+  parserHealthy: boolean;
+  messagesReceived: number;
+  reportsParsed: number;
+  reportsRetained: number;
+  malformedMessages: number;
+  droppedReports: Record<string, number>;
+  lastReportSecondsAgo: number | null;
   messagesLast10s: number;
   updatedAt: string;
 } | null {
@@ -231,17 +246,39 @@ function parsePskMetrics(value: string | null): {
   try {
     const parsed = JSON.parse(value) as Partial<{
       mqttConnected: boolean;
+      parserHealthy: boolean;
+      messagesReceived: number;
+      reportsParsed: number;
+      reportsRetained: number;
+      malformedMessages: number;
+      droppedReports: Record<string, number>;
+      lastReportSecondsAgo: number | null;
       messagesLast10s: number;
       updatedAt: string;
     }>;
 
     if (
       typeof parsed.mqttConnected === "boolean" &&
+      typeof parsed.parserHealthy === "boolean" &&
+      typeof parsed.messagesReceived === "number" &&
+      typeof parsed.reportsParsed === "number" &&
+      typeof parsed.reportsRetained === "number" &&
+      typeof parsed.malformedMessages === "number" &&
+      typeof parsed.droppedReports === "object" &&
+      parsed.droppedReports !== null &&
+      (typeof parsed.lastReportSecondsAgo === "number" || parsed.lastReportSecondsAgo === null) &&
       typeof parsed.messagesLast10s === "number" &&
       typeof parsed.updatedAt === "string"
     ) {
       return {
         mqttConnected: parsed.mqttConnected,
+        parserHealthy: parsed.parserHealthy,
+        messagesReceived: parsed.messagesReceived,
+        reportsParsed: parsed.reportsParsed,
+        reportsRetained: parsed.reportsRetained,
+        malformedMessages: parsed.malformedMessages,
+        droppedReports: parsed.droppedReports,
+        lastReportSecondsAgo: parsed.lastReportSecondsAgo,
         messagesLast10s: parsed.messagesLast10s,
         updatedAt: parsed.updatedAt,
       };
@@ -321,6 +358,40 @@ function getActivePskBands(summary: unknown): string[] {
   return Object.entries(summary as Record<string, unknown>)
     .filter((entry) => typeof entry[1] === "number" && (entry[1] as number) > 0)
     .map(([band]) => band);
+}
+
+function getActivePskDirections(summary: unknown): string[] {
+  if (!summary || typeof summary !== "object") {
+    return [];
+  }
+
+  const bands = Reflect.get(summary, "bands");
+
+  if (!Array.isArray(bands)) {
+    return [];
+  }
+
+  const directions = new Set<string>();
+
+  for (const band of bands) {
+    if (!band || typeof band !== "object") {
+      continue;
+    }
+
+    const directionCounts = Reflect.get(band, "directionCounts");
+
+    if (!directionCounts || typeof directionCounts !== "object") {
+      continue;
+    }
+
+    for (const [direction, value] of Object.entries(directionCounts as Record<string, unknown>)) {
+      if (typeof value === "number" && value > 0) {
+        directions.add(direction);
+      }
+    }
+  }
+
+  return [...directions];
 }
 
 async function buildPersonalizedSnapshot(
