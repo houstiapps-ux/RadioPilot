@@ -19,8 +19,18 @@ type OpportunityCard = {
   score: number;
   direction?: string;
   bearing?: number;
+  beamHeading?: number;
   region?: string;
   confidence?: "Low" | "Medium" | "High";
+  confidenceReason?: string;
+  bandState?: "Opening" | "Stable" | "Fading";
+  trendLabel?: "Rising" | "Steady" | "Falling";
+  directionConfidence?: "High" | "Medium" | "Low";
+  strongestPropagationSignal?: string;
+  dxEventType?: string;
+  signals?: readonly string[];
+  why?: readonly string[];
+  actionLine?: string;
 };
 
 type SolarData = {
@@ -171,7 +181,7 @@ export function App() {
           }}
         />
         <FilterGroup
-          label="Band Scope"
+          label="Bands"
           value={settings.bandScope ?? "any"}
           options={[
             { value: "any", label: "Any" },
@@ -306,7 +316,8 @@ function FilterGroup(props: {
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="filter-group">
+    <div className="filter-group-card">
+      <div className="filter-group">
       <span className="strip-label">{props.label}</span>
       <div className="filter-chip-row">
         {props.options.map((option) => (
@@ -321,6 +332,7 @@ function FilterGroup(props: {
             {option.label}
           </button>
         ))}
+      </div>
       </div>
     </div>
   );
@@ -493,6 +505,8 @@ function OperatorCard(props: {
   const view = toOperatorView(props.card, props.tone);
   const modeItems = getModeIndicators(props.card);
   const operationItem = getOperationIndicator(props.card.tags);
+  const intelligenceChips = getIntelligenceChips(props.card, props.tone);
+  const whyItems = getWhyItems(props.card, props.tone);
 
   return (
     <article className={`operator-card ${props.featured ? "operator-card-featured" : ""}`}>
@@ -529,6 +543,29 @@ function OperatorCard(props: {
       </div>
 
       <p className="operator-reason">{view.reasonSummary}</p>
+
+      {props.card.actionLine ? (
+        <div className={`action-line action-line-${props.tone}`}>{props.card.actionLine}</div>
+      ) : null}
+
+      {intelligenceChips.length > 0 ? (
+        <div className="intel-strip">
+          {intelligenceChips.map((chip) => (
+            <span key={chip} className="intel-chip">{chip}</span>
+          ))}
+        </div>
+      ) : null}
+
+      {whyItems.length > 0 ? (
+        <div className="evidence-block">
+          <span className="operation-label">Why</span>
+          <div className="evidence-list">
+            {whyItems.map((item) => (
+              <span key={item} className="evidence-item">{item}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="operation-block">
         <span className="operation-label">Operation</span>
@@ -913,6 +950,75 @@ function formatOperatorSummary(summary: string | undefined, fallback: string): s
     .replace(/\b(N|NE|E|SE|S|SW|W|NW) \((\d{1,3})°\)/g, "$1 · $2°")
     .replace(/\b(N|NE|E|SE|S|SW|W|NW) \((\d{1,3})Â°\)/g, "$1 · $2°")
     .replace(/\s*,\s*/g, " · ");
+}
+
+function getIntelligenceChips(card: OpportunityCard, tone: PanelTone): readonly string[] {
+  const chips: string[] = [];
+
+  if (tone === "watch") {
+    if (card.bandState === "Opening") {
+      chips.push(card.trendLabel === "Rising" ? "Opening likely" : "Opening");
+    } else if (card.trendLabel === "Rising") {
+      chips.push("Building");
+    } else if (card.bandState) {
+      chips.push(card.bandState);
+    }
+  } else if (card.bandState) {
+    chips.push(card.bandState);
+  }
+
+  if (card.directionConfidence) {
+    chips.push(`Path ${card.directionConfidence.toLowerCase()}`);
+  }
+
+  if (tone === "dx" && card.dxEventType) {
+    chips.push(card.dxEventType);
+  } else if (card.strongestPropagationSignal) {
+    chips.push(card.strongestPropagationSignal);
+  }
+
+  if (card.confidenceReason) {
+    chips.push(card.confidenceReason);
+  }
+
+  for (const signal of card.signals ?? []) {
+    if (
+      !chips.includes(signal) &&
+      (
+        tone !== "dx" ||
+        signal === card.dxEventType ||
+        signal.includes("Rare DX") ||
+        signal.includes("DXpedition") ||
+        signal.includes("spotter") ||
+        signal.includes("Multi-band")
+      )
+    ) {
+      chips.push(signal);
+    }
+  }
+
+  return chips.slice(0, tone === "watch" ? 4 : 3);
+}
+
+function getWhyItems(card: OpportunityCard, tone: PanelTone): readonly string[] {
+  const items = [...(card.why ?? [])];
+
+  if (tone === "watch" && card.signals) {
+    for (const signal of card.signals) {
+      if (
+        (signal.includes("rising") || signal.includes("increasing") || signal.includes("Solar supports")) &&
+        !items.includes(signal)
+      ) {
+        items.push(signal);
+      }
+    }
+  }
+
+  if (tone === "best" && card.strongestPropagationSignal && !items.includes(card.strongestPropagationSignal)) {
+    items.push(card.strongestPropagationSignal);
+  }
+
+  return items.slice(0, 4);
 }
 
 function parseSolarNumber(value: number | string | undefined): number | null {
