@@ -26,8 +26,7 @@ dotenv.config({ path: path.resolve(__dirname, "../../../.env"), quiet: true });
 
 const FILTER_CACHE_REFRESH_MS = 5_000;
 const FILTER_CACHE_MAX_STALE_MS = 30_000;
-const port = Number(process.env.PORT ?? "3000");
-const host = process.env.HOST ?? "0.0.0.0";
+const port = Number(process.env.PORT || 8080);
 
 if (process.env.NODE_ENV === "production" && !process.env.REDIS_URL) {
   throw new Error("REDIS_URL is not configured for production");
@@ -184,7 +183,8 @@ app.get("/debug/propagation", async (request) => {
   return formatPropagationDebugResponse(propagation);
 });
 
-await app.listen({ port, host });
+await app.listen({ port, host: "0.0.0.0" });
+console.log("API listening on port", port);
 
 function parseSnapshot(value: string | null): OpportunitySnapshot | null {
   if (!value) {
