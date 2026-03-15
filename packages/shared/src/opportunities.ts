@@ -696,8 +696,6 @@ function buildCardSummary(stats: BandStats): string {
   }
 
   summaryParts.push(`${formatModeFamily(stats.dominantModeFamily)} likely good`);
-  summaryParts.push(`Confidence: ${stats.confidence}`);
-
   return summaryParts.join(", ");
 }
 

@@ -12,6 +12,8 @@ import mqtt, { type MqttClient } from "mqtt";
 const defaultWindowMinutes = 15;
 const defaultMqttUrl = "mqtt://mqtt.pskreporter.info";
 const reconnectPeriodMs = 5_000;
+const diagnosticsIntervalMs = 5_000;
+const mockReportIntervalMs = 200;
 
 type PskReporterRecord = Record<string, unknown>;
 const supportedBands: readonly Band[] = [
@@ -29,6 +31,8 @@ const supportedBands: readonly Band[] = [
   "2m",
 ];
 const supportedModes = new Set(["FT8", "FT4"]);
+const mockBands: readonly Band[] = ["10m", "12m", "15m", "17m", "20m", "30m", "40m"];
+const mockGridPrefixes = ["IO", "FN", "JN", "PM", "QF", "FF", "IM", "KP"] as const;
 
 export interface PskReporterMqttHandle {
   stop(): Promise<void>;
@@ -37,55 +41,151 @@ export interface PskReporterMqttHandle {
 interface PskReporterMqttOptions {
   readonly windowMinutes?: number;
   readonly onSummary: (summary: PskReporterSummary) => Promise<void> | void;
+  readonly onDirectionalCounts?: (counts: PskReporterDirectionalCounts) => Promise<void> | void;
+  readonly onMetrics?: (metrics: PskReporterWorkerMetrics) => Promise<void> | void;
   readonly onDiagnostic?: (event: string, details: Record<string, unknown>) => void;
 }
+
+export interface PskReporterWorkerMetrics {
+  readonly mqttConnected: boolean;
+  readonly messagesLast10s: number;
+  readonly updatedAt: string;
+}
+
+interface PskReporterDiagnosticsState {
+  receivedMessages: number;
+  parsedReports: number;
+  malformedMessages: number;
+  dirtySummary: boolean;
+  mqttConnected: boolean;
+  recentMessageTimes: number[];
+}
+
+type DirectionBucket = NonNullable<ReturnType<typeof estimatePathBetweenLocators>>["direction"];
+
+export type PskReporterDirectionalCounts = Readonly<Record<Band, Readonly<Record<DirectionBucket, number>>>>;
+
+interface DirectionalAggregationState {
+  currentBucketIndex: number;
+  buckets: Array<Record<Band, Record<DirectionBucket, number>>>;
+}
+
+const directionalBuckets = 12;
+const directionOrder: readonly DirectionBucket[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
 export function startPskReporterMqttIngestion(
   options: PskReporterMqttOptions,
 ): PskReporterMqttHandle {
   const windowMinutes = options.windowMinutes ?? defaultWindowMinutes;
   const mqttUrl = process.env.PSK_REPORTER_MQTT_URL?.trim() || defaultMqttUrl;
+  const useMock = process.env.MOCK_PSK?.trim().toLowerCase() === "true";
+  const referenceGrid = normalizeGrid(
+    process.env.PSK_REFERENCE_GRID?.trim() || process.env.HOME_GRID?.trim(),
+  );
   const topics = buildPskReporterTopics();
   const recentReports: PskReporterReport[] = [];
-  const client = mqtt.connect(mqttUrl, {
+  const directionalAggregation = createDirectionalAggregationState();
+  const diagnostics: PskReporterDiagnosticsState = {
+    receivedMessages: 0,
+    parsedReports: 0,
+    malformedMessages: 0,
+    dirtySummary: false,
+    mqttConnected: false,
+    recentMessageTimes: [] as number[],
+  };
+  const flushTimer = setInterval(() => {
+    void flushSummary(
+      recentReports,
+      diagnostics,
+      directionalAggregation,
+      windowMinutes,
+      referenceGrid,
+      options,
+    );
+  }, diagnosticsIntervalMs);
+  const client = useMock ? null : mqtt.connect(mqttUrl, {
     reconnectPeriod: reconnectPeriodMs,
     connectTimeout: 15_000,
     keepalive: 30,
   });
+  const mockTimer = useMock
+    ? setInterval(() => {
+      const payload = Buffer.from(JSON.stringify(generateMockPskPayload()), "utf8");
+      void handlePskReporterMessage(
+        payload,
+        recentReports,
+        diagnostics,
+        directionalAggregation,
+        referenceGrid,
+        options,
+      );
+    }, mockReportIntervalMs)
+    : undefined;
 
-  client.on("connect", () => {
-    options.onDiagnostic?.("psk-connect", {
-      mqttUrl,
-      topicCount: topics.length,
+  if (useMock) {
+    diagnostics.mqttConnected = true;
+    options.onDiagnostic?.("psk-mock-start", {
+      intervalMs: mockReportIntervalMs,
+    });
+  }
+
+  if (client) {
+    client.on("connect", () => {
+      diagnostics.mqttConnected = true;
+      options.onDiagnostic?.("psk-connect", {
+        mqttUrl,
+        topicCount: topics.length,
+      });
+
+      for (const topic of topics) {
+        client.subscribe(topic, (error) => {
+          if (error) {
+            console.error("PSK Reporter subscribe failed", { topic, error });
+            return;
+          }
+
+          options.onDiagnostic?.("psk-subscribe", { topic });
+        });
+      }
     });
 
-    for (const topic of topics) {
-      client.subscribe(topic, (error) => {
-        if (error) {
-          console.error("PSK Reporter subscribe failed", { topic, error });
-          return;
-        }
+    client.on("reconnect", () => {
+      diagnostics.mqttConnected = false;
+      options.onDiagnostic?.("psk-reconnect", { mqttUrl });
+    });
 
-        options.onDiagnostic?.("psk-subscribe", { topic });
-      });
-    }
-  });
+    client.on("error", (error) => {
+      diagnostics.mqttConnected = false;
+      console.error("PSK Reporter MQTT error", error);
+    });
 
-  client.on("reconnect", () => {
-    options.onDiagnostic?.("psk-reconnect", { mqttUrl });
-  });
+    client.on("close", () => {
+      diagnostics.mqttConnected = false;
+      options.onDiagnostic?.("psk-close", { mqttUrl });
+    });
 
-  client.on("error", (error) => {
-    console.error("PSK Reporter MQTT error", error);
-  });
-
-  client.on("message", (_topic, payload) => {
-    void handlePskReporterMessage(payload, recentReports, windowMinutes, options);
-  });
+    client.on("message", (_topic, payload) => {
+      void handlePskReporterMessage(
+        payload,
+        recentReports,
+        diagnostics,
+        directionalAggregation,
+        referenceGrid,
+        options,
+      );
+    });
+  }
 
   return {
     async stop() {
-      await endMqttClient(client);
+      clearInterval(flushTimer);
+      if (mockTimer !== undefined) {
+        clearInterval(mockTimer);
+      }
+
+      if (client) {
+        await endMqttClient(client);
+      }
     },
   };
 }
@@ -93,14 +193,19 @@ export function startPskReporterMqttIngestion(
 async function handlePskReporterMessage(
   payload: Buffer,
   recentReports: PskReporterReport[],
-  windowMinutes: number,
+  diagnostics: PskReporterDiagnosticsState,
+  directionalAggregation: DirectionalAggregationState,
+  referenceGrid: string | undefined,
   options: PskReporterMqttOptions,
 ): Promise<void> {
+  diagnostics.receivedMessages += 1;
+  diagnostics.recentMessageTimes.push(Date.now());
   let parsedPayload: unknown;
 
   try {
     parsedPayload = JSON.parse(payload.toString("utf8")) as unknown;
   } catch (error) {
+    diagnostics.malformedMessages += 1;
     options.onDiagnostic?.("psk-malformed-message", {
       error: error instanceof Error ? error.message : String(error),
       preview: payload.toString("utf8").slice(0, 120),
@@ -115,9 +220,53 @@ async function handlePskReporterMessage(
   }
 
   recentReports.push(...reports);
-  pruneReports(recentReports, Date.now(), windowMinutes);
-  const summary = buildPskReporterSummary(recentReports, Date.now(), windowMinutes);
+  diagnostics.parsedReports += reports.length;
+  diagnostics.dirtySummary = true;
+  if (referenceGrid) {
+    updateDirectionalAggregation(directionalAggregation, referenceGrid, reports);
+  }
+}
+
+async function flushSummary(
+  recentReports: PskReporterReport[],
+  diagnostics: PskReporterDiagnosticsState,
+  directionalAggregation: DirectionalAggregationState,
+  windowMinutes: number,
+  referenceGrid: string | undefined,
+  options: PskReporterMqttOptions,
+): Promise<void> {
+  const now = Date.now();
+  pruneReports(recentReports, now, windowMinutes);
+  pruneRecentMessageTimes(diagnostics.recentMessageTimes, now);
+
+  options.onDiagnostic?.("psk-message-stats", {
+    receivedMessages: diagnostics.receivedMessages,
+    parsedReports: diagnostics.parsedReports,
+    malformedMessages: diagnostics.malformedMessages,
+    retainedReports: recentReports.length,
+  });
+  await options.onMetrics?.({
+    mqttConnected: diagnostics.mqttConnected,
+    messagesLast10s: diagnostics.recentMessageTimes.length,
+    updatedAt: new Date(now).toISOString(),
+  });
+  if (referenceGrid) {
+    await options.onDirectionalCounts?.(sumDirectionalAggregation(directionalAggregation));
+    rotateDirectionalAggregation(directionalAggregation);
+  }
+
+  if (!diagnostics.dirtySummary) {
+    return;
+  }
+
+  const summary = buildPskReporterSummary(recentReports, now, windowMinutes);
   await options.onSummary(summary);
+  diagnostics.dirtySummary = false;
+  options.onDiagnostic?.("psk-summary-flush", {
+    retainedReports: recentReports.length,
+    bandCount: summary.bands.length,
+    freshnessTimestamp: summary.freshnessTimestamp,
+  });
 }
 
 export function parsePskReporterPayload(payload: unknown): PskReporterReport[] {
@@ -139,8 +288,8 @@ export function parsePskReporterPayload(payload: unknown): PskReporterReport[] {
 
 export function buildPskReporterTopics(): string[] {
   return supportedBands.flatMap((band) => [
-    `pskr/filter/v2/${band}/FT8/#`,
-    `pskr/filter/v2/${band}/FT4/#`,
+    `pskr/filter/v2/${band}/FT8/+/+/+/+/+/+`,
+    `pskr/filter/v2/${band}/FT4/+/+/+/+/+/+`,
   ]);
 }
 
@@ -428,6 +577,130 @@ function pruneReports(
       reports.splice(index, 1);
     }
   }
+}
+
+function pruneRecentMessageTimes(messageTimes: number[], now: number): void {
+  const cutoff = now - 10_000;
+
+  for (let index = messageTimes.length - 1; index >= 0; index -= 1) {
+    if (messageTimes[index] < cutoff) {
+      messageTimes.splice(index, 1);
+    }
+  }
+}
+
+function generateMockPskPayload(): Record<string, unknown> {
+  const band = pickRandom(mockBands);
+  const frequencyHz = bandToMockFrequencyHz(band);
+
+  return {
+    senderCallsign: `MOCK${randomInt(100, 999)}`,
+    receiverCallsign: `RX${randomInt(100, 999)}`,
+    senderLocator: generateMockGrid(),
+    receiverLocator: generateMockGrid(),
+    mode: "FT8",
+    frequency: String(frequencyHz),
+    snr: String(randomInt(-25, 10)),
+    observedAt: new Date().toISOString(),
+  };
+}
+
+function generateMockGrid(): string {
+  const prefix = pickRandom(mockGridPrefixes);
+  const firstDigits = randomInt(0, 9);
+  const secondDigits = randomInt(0, 9);
+  const firstSuffix = String.fromCharCode(65 + randomInt(0, 23));
+  const secondSuffix = String.fromCharCode(65 + randomInt(0, 23));
+  return `${prefix}${firstDigits}${secondDigits}${firstSuffix}${secondSuffix}`;
+}
+
+function bandToMockFrequencyHz(band: Band): number {
+  const centerFrequencies: Record<Band, number> = {
+    "160m": 1840000,
+    "80m": 3573000,
+    "60m": 5357000,
+    "40m": 7074000,
+    "30m": 10136000,
+    "20m": 14074000,
+    "17m": 18100000,
+    "15m": 21074000,
+    "12m": 24915000,
+    "10m": 28074000,
+    "6m": 50313000,
+    "2m": 144174000,
+  };
+
+  return centerFrequencies[band];
+}
+
+function pickRandom<T>(values: readonly T[]): T {
+  return values[randomInt(0, values.length - 1)];
+}
+
+function randomInt(min: number, max: number): number {
+  const lower = Math.ceil(min);
+  const upper = Math.floor(max);
+  return Math.floor(Math.random() * (upper - lower + 1)) + lower;
+}
+
+function createDirectionalAggregationState(): DirectionalAggregationState {
+  return {
+    currentBucketIndex: 0,
+    buckets: Array.from({ length: directionalBuckets }, () => createDirectionalCounterBucket()),
+  };
+}
+
+function createDirectionalCounterBucket(): Record<Band, Record<DirectionBucket, number>> {
+  return supportedBands.reduce<Record<Band, Record<DirectionBucket, number>>>((current, band) => {
+    current[band] = directionOrder.reduce<Record<DirectionBucket, number>>((bandCounts, direction) => {
+      bandCounts[direction] = 0;
+      return bandCounts;
+    }, {} as Record<DirectionBucket, number>);
+    return current;
+  }, {} as Record<Band, Record<DirectionBucket, number>>);
+}
+
+function updateDirectionalAggregation(
+  aggregation: DirectionalAggregationState,
+  referenceGrid: string,
+  reports: readonly PskReporterReport[],
+): void {
+  const bucket = aggregation.buckets[aggregation.currentBucketIndex];
+
+  for (const report of reports) {
+    if (!report.band) {
+      continue;
+    }
+
+    const estimate = estimatePathBetweenLocators(referenceGrid, report.senderLocator);
+
+    if (!estimate) {
+      continue;
+    }
+
+    bucket[report.band][estimate.direction] += 1;
+  }
+}
+
+function sumDirectionalAggregation(
+  aggregation: DirectionalAggregationState,
+): PskReporterDirectionalCounts {
+  const totals = createDirectionalCounterBucket();
+
+  for (const bucket of aggregation.buckets) {
+    for (const band of supportedBands) {
+      for (const direction of directionOrder) {
+        totals[band][direction] += bucket[band][direction];
+      }
+    }
+  }
+
+  return totals;
+}
+
+function rotateDirectionalAggregation(aggregation: DirectionalAggregationState): void {
+  aggregation.currentBucketIndex = (aggregation.currentBucketIndex + 1) % aggregation.buckets.length;
+  aggregation.buckets[aggregation.currentBucketIndex] = createDirectionalCounterBucket();
 }
 
 function endMqttClient(client: MqttClient): Promise<void> {

@@ -94,14 +94,21 @@ app.get("/debug/solar", async () => {
 });
 
 app.get("/debug/psk", async () => {
-  const [rawSummary, freshness] = await Promise.all([
+  const [rawSummary, freshness, rawMetrics] = await Promise.all([
     redis.get("psk:summary"),
     redis.get("psk:freshness"),
+    redis.get("psk:metrics"),
   ]);
+  const summary = parseJson(rawSummary ?? "");
+  const metrics = parsePskMetrics(rawMetrics);
+  const lastRedisWriteSecondsAgo = getSecondsAgo(freshness);
 
   return {
-    summary: parseJson(rawSummary ?? ""),
-    freshness,
+    mqttConnected: metrics?.mqttConnected ?? false,
+    messagesLast10s: metrics?.messagesLast10s ?? 0,
+    activeBands: getActivePskBands(summary),
+    lastRedisWriteSecondsAgo,
+    summary: summary ?? {},
   };
 });
 
@@ -162,6 +169,40 @@ function parsePskSummary(value: string | null): PskReporterSummary | null {
   }
 }
 
+function parsePskMetrics(value: string | null): {
+  mqttConnected: boolean;
+  messagesLast10s: number;
+  updatedAt: string;
+} | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<{
+      mqttConnected: boolean;
+      messagesLast10s: number;
+      updatedAt: string;
+    }>;
+
+    if (
+      typeof parsed.mqttConnected === "boolean" &&
+      typeof parsed.messagesLast10s === "number" &&
+      typeof parsed.updatedAt === "string"
+    ) {
+      return {
+        mqttConnected: parsed.mqttConnected,
+        messagesLast10s: parsed.messagesLast10s,
+        updatedAt: parsed.updatedAt,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 function getHomeGridFromQuery(query: unknown): string | undefined {
   if (!query || typeof query !== "object") {
     return undefined;
@@ -198,6 +239,38 @@ function parseJson(value: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+function getSecondsAgo(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((Date.now() - parsed) / 1000));
+}
+
+function getActivePskBands(summary: unknown): string[] {
+  if (!summary || typeof summary !== "object") {
+    return [];
+  }
+
+  if (Array.isArray(Reflect.get(summary, "bands"))) {
+    const bands = Reflect.get(summary, "bands") as Array<Record<string, unknown>>;
+
+    return bands
+      .filter((band) => typeof band.band === "string" && typeof band.currentWindowCount === "number" && band.currentWindowCount > 0)
+      .map((band) => band.band as string);
+  }
+
+  return Object.entries(summary as Record<string, unknown>)
+    .filter((entry) => typeof entry[1] === "number" && (entry[1] as number) > 0)
+    .map(([band]) => band);
 }
 
 async function buildPersonalizedSnapshot(

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildPskReporterSummary,
   buildPskReporterTopics,
+  startPskReporterMqttIngestion,
   parsePskReporterPayload,
 } from "./psk-reporter.js";
 
@@ -81,8 +82,29 @@ test("builds rolling per-band counts, direction counts, and trend", () => {
 test("builds shared MQTT topics for supported bands and modes", () => {
   const topics = buildPskReporterTopics();
 
-  assert.ok(topics.includes("pskr/filter/v2/20m/FT8/#"));
-  assert.ok(topics.includes("pskr/filter/v2/20m/FT4/#"));
-  assert.ok(topics.includes("pskr/filter/v2/6m/FT8/#"));
+  assert.ok(topics.includes("pskr/filter/v2/20m/FT8/+/+/+/+/+/+"));
+  assert.ok(topics.includes("pskr/filter/v2/20m/FT4/+/+/+/+/+/+"));
+  assert.ok(topics.includes("pskr/filter/v2/6m/FT8/+/+/+/+/+/+"));
   assert.equal(topics.length, 24);
+});
+
+test("mock mode feeds the same ingestion pipeline", async () => {
+  process.env.MOCK_PSK = "true";
+  const summaries: unknown[] = [];
+  const metrics: unknown[] = [];
+  const handle = startPskReporterMqttIngestion({
+    onSummary: async (summary) => {
+      summaries.push(summary);
+    },
+    onMetrics: async (value) => {
+      metrics.push(value);
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 5_500));
+  await handle.stop();
+  delete process.env.MOCK_PSK;
+
+  assert.ok(metrics.length >= 1);
+  assert.ok(summaries.length >= 1);
 });

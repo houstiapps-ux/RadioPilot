@@ -12,7 +12,10 @@ import {
 } from "@radio-pilot/shared";
 import { createClient } from "redis";
 import { fetchDxHeatSpots } from "./sources/dxheat.js";
-import { startPskReporterMqttIngestion } from "./sources/psk-reporter.js";
+import {
+  startPskReporterMqttIngestion,
+  type PskReporterDirectionalCounts,
+} from "./sources/psk-reporter.js";
 import { fetchPotaActivations } from "./sources/pota.js";
 import { fetchSolarConditions } from "./sources/solar.js";
 import { fetchSotaActivations } from "./sources/sota.js";
@@ -283,8 +286,14 @@ function startPskReporterPolling(): void {
     onSummary: async (summary) => {
       await persistPskReporterSummary(summary);
     },
+    onDirectionalCounts: async (counts) => {
+      await persistPskReporterDirectionalCounts(counts);
+    },
+    onMetrics: async (metrics) => {
+      await redis.set("psk:metrics", JSON.stringify(metrics));
+    },
     onDiagnostic: (event, details) => {
-      debug(`PSK Reporter ${event} ${JSON.stringify(details)}`);
+      console.info(`PSK Reporter ${event} ${JSON.stringify(details)}`);
     },
   });
   console.info("PSK Reporter MQTT ingestion started");
@@ -360,6 +369,27 @@ async function persistPskReporterSummary(summary: PskReporterSummary): Promise<v
     redis.set("psk:summary:latest", JSON.stringify(summary)),
     redis.set("psk:freshness", summary.freshnessTimestamp),
   ]);
+  console.info(
+    "PSK Reporter redis flush",
+    JSON.stringify({
+      bandCount: summary.bands.length,
+      freshnessTimestamp: summary.freshnessTimestamp,
+    }),
+  );
+}
+
+async function persistPskReporterDirectionalCounts(
+  counts: PskReporterDirectionalCounts,
+): Promise<void> {
+  const writes: Promise<unknown>[] = [];
+
+  for (const [band, bandCounts] of Object.entries(counts) as Array<[keyof PskReporterDirectionalCounts, PskReporterDirectionalCounts[keyof PskReporterDirectionalCounts]]>) {
+    for (const [direction, value] of Object.entries(bandCounts)) {
+      writes.push(redis.set(`psk:band:${band}:dir:${direction}`, String(value)));
+    }
+  }
+
+  await Promise.all(writes);
 }
 
 async function pollActivations(): Promise<void> {
