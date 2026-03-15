@@ -588,11 +588,24 @@ body {
   line-height: 1.45;
 }
 
+.operation-block {
+  margin-top: 12px;
+}
+
+.operation-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #5a7693;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .tag-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
 }
 
 .tag-chip {

@@ -421,7 +421,7 @@ function OperatorCard(props: {
 }) {
   const view = toOperatorView(props.card, props.tone);
   const modeItems = getModeIndicators(props.card);
-  const tagItems = props.card.tags.map(getTagIndicator);
+  const operationItems = getOperationIndicators(props.card.tags);
 
   return (
     <article className={`operator-card ${props.featured ? "operator-card-featured" : ""}`}>
@@ -459,28 +459,31 @@ function OperatorCard(props: {
 
       <p className="operator-reason">{view.reasonSummary}</p>
 
-      <div className="tag-strip">
-        {tagItems.length > 0 ? (
-          tagItems.map((item) => item.kind === "icon"
-            ? (
-              <span
-                key={item.id}
-                className="tag-chip tag-chip-icon"
-                title={item.label}
-                aria-label={item.label}
-              >
-                <span className="inline-symbol" aria-hidden="true">{item.glyph}</span>
-                <span>{item.text}</span>
-              </span>
-            )
-            : (
-              <span key={item.id} className="tag-chip">
-                {item.text}
-              </span>
-            ))
-        ) : (
-          <span className="tag-chip tag-chip-muted">None</span>
-        )}
+      <div className="operation-block">
+        <span className="operation-label">Operation</span>
+        <div className="tag-strip">
+          {operationItems.length > 0 ? (
+            operationItems.map((item) => item.kind === "icon"
+              ? (
+                <span
+                  key={item.id}
+                  className="tag-chip tag-chip-icon"
+                  title={item.label}
+                  aria-label={item.label}
+                >
+                  <span className="inline-symbol" aria-hidden="true">{item.glyph}</span>
+                  <span>{item.text}</span>
+                </span>
+              )
+              : (
+                <span key={item.id} className="tag-chip">
+                  {item.text}
+                </span>
+              ))
+          ) : (
+            <span className="tag-chip tag-chip-muted">Fixed station</span>
+          )}
+        </div>
       </div>
     </article>
   );
@@ -729,6 +732,24 @@ function getTagIndicator(tag: string): TagIndicator {
   }
 
   return { kind: "text", id: `tag-${normalized}`, text: tag };
+}
+
+function getOperationIndicators(tags: readonly string[]): readonly TagIndicator[] {
+  const indicators = tags
+    .map(getTagIndicator)
+    .filter((item) => !modeTags.has(item.text.toUpperCase()));
+
+  return indicators.map((item) => {
+    if (item.id === "tag-portable") {
+      return {
+        ...item,
+        text: "Portable (/P)",
+        label: "Portable station",
+      };
+    }
+
+    return item;
+  });
 }
 
 function getConfidence(score: number): string {
