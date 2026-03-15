@@ -1,9 +1,17 @@
+import dotenv from "dotenv";
 import { createConnection } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { parseDxClusterLine, type ParsedSpot } from "@radio-pilot/shared";
 import { createClient } from "redis";
 import { fetchDxHeatSpots } from "./sources/dxheat.js";
 import { startSnapshotLoop } from "./snapshot.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 const telnetIac = 255;
 const telnetDo = 253;
