@@ -63,7 +63,15 @@ console.log("Redis URL source:", process.env.REDIS_URL ? "env REDIS_URL" : "loca
 await redis.connect();
 
 app.addHook("onRequest", async (request, reply) => {
-  reply.header("Access-Control-Allow-Origin", "http://localhost:5173");
+  const allowedOrigins = new Set([
+    "http://localhost:5173",
+    "https://radiopilot.up.railway.app",
+  ]);
+  const origin = request.headers.origin;
+
+  if (origin && allowedOrigins.has(origin)) {
+    reply.header("Access-Control-Allow-Origin", origin);
+  }
   reply.header("Access-Control-Allow-Methods", "GET, OPTIONS");
   reply.header("Access-Control-Allow-Headers", "Content-Type");
 
@@ -786,7 +794,7 @@ function renderIndexPage(): string {
 
       async function load() {
         try {
-          const response = await fetch("http://localhost:3000/api/opportunities");
+          const response = await fetch("/api/opportunities");
 
           if (!response.ok) {
             throw new Error("Request failed with status " + response.status);
