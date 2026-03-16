@@ -334,24 +334,31 @@ async function flushSummary(
     return;
   }
 
-  const summary = buildPskReporterSummary(recentReports, now, windowMinutes);
-  const hasParsedReports =
-    diagnostics.parsedReports > 0 &&
-    summary.bands.some((band) => band.currentWindowCount > 0 || band.previousWindowCount > 0);
+  try {
+    const summary = buildPskReporterSummary(recentReports, now, windowMinutes);
+    const hasParsedReports =
+      diagnostics.parsedReports > 0 &&
+      summary.bands.some((band) => band.currentWindowCount > 0 || band.previousWindowCount > 0);
 
-  if (!hasParsedReports) {
-    console.warn("PSK summary update skipped due to zero parsed reports");
+    if (!hasParsedReports) {
+      console.warn("PSK summary update skipped due to zero parsed reports");
+      diagnostics.dirtySummary = false;
+      return;
+    }
+
+    await options.onSummary(summary);
     diagnostics.dirtySummary = false;
-    return;
+    options.onDiagnostic?.("psk-summary-flush", {
+      retainedReports: recentReports.length,
+      bandCount: summary.bands.length,
+      freshnessTimestamp: summary.freshnessTimestamp,
+    });
+  } catch (error) {
+    console.error("PSK summary flush failed; worker will continue running", {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
   }
-
-  await options.onSummary(summary);
-  diagnostics.dirtySummary = false;
-  options.onDiagnostic?.("psk-summary-flush", {
-    retainedReports: recentReports.length,
-    bandCount: summary.bands.length,
-    freshnessTimestamp: summary.freshnessTimestamp,
-  });
 }
 
 export function parsePskReporterPayload(payload: unknown): {
