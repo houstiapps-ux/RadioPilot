@@ -73,6 +73,13 @@ function createMockRedis() {
       const value = hashes.get(key)?.get(field);
       return typeof value === "number" ? String(value) : null;
     },
+    async hmGet(key: string, fields: string[]): Promise<Array<string | null>> {
+      const hash = hashes.get(key);
+      return fields.map((field) => {
+        const value = hash?.get(field);
+        return typeof value === "number" ? String(value) : null;
+      });
+    },
     async hIncrBy(key: string, field: string, increment: number): Promise<number> {
       const hash = hashes.get(key) ?? new Map<string, number>();
       const next = (hash.get(field) ?? 0) + increment;

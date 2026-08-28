@@ -1,0 +1,28 @@
+# Static web bundle served by Caddy, which also terminates TLS and fronts the API.
+FROM node:22-slim AS build
+
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/worker/package.json apps/worker/
+COPY packages/shared/package.json packages/shared/
+
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+
+# Empty base URL keeps the app same-origin: Caddy proxies /api and /health to
+# the API container, so there is no cross-origin request and no CORS to satisfy.
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+RUN pnpm --filter @radio-pilot/web build
+
+FROM caddy:2-alpine
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/apps/web/dist /srv

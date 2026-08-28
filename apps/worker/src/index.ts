@@ -62,6 +62,10 @@ const recentTelnetSpotFingerprints = new Map<string, number>();
 let reconnectDelayMs = reconnectBaseDelayMs;
 let reconnectTimer: NodeJS.Timeout | undefined;
 
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection in worker; process stays up", reason);
+});
+
 console.info("Connecting to Redis");
 await redis.connect();
 console.info("Redis connected");
@@ -277,12 +281,16 @@ async function handleTelnetLine(line: string): Promise<void> {
 
 function startDxHeatPolling(): void {
   console.info(`DXHeat polling started with interval ${pollIntervalMs}ms`);
-  void runDxHeatPollingLoop();
+  void runDxHeatPollingLoop().catch((error: unknown) => {
+    console.error("dxheat loop exited unexpectedly", error);
+  });
 }
 
 function startSolarPolling(): void {
   console.info(`Solar polling started with interval ${solarPollIntervalMs}ms`);
-  void runSolarPollingLoop();
+  void runSolarPollingLoop().catch((error: unknown) => {
+    console.error("solar loop exited unexpectedly", error);
+  });
 }
 
 function startPskReporterPolling(): void {
@@ -308,7 +316,9 @@ function startPskReporterPolling(): void {
 
 function startActivationPolling(): void {
   console.info(`Activation polling started with interval ${activationPollIntervalMs}ms`);
-  void runActivationPollingLoop();
+  void runActivationPollingLoop().catch((error: unknown) => {
+    console.error("activations loop exited unexpectedly", error);
+  });
 }
 
 async function pollDxHeat(): Promise<void> {
@@ -347,10 +357,7 @@ async function pollDxHeat(): Promise<void> {
 }
 
 async function runDxHeatPollingLoop(): Promise<void> {
-  while (true) {
-    await pollDxHeat();
-    await delay(pollIntervalMs);
-  }
+  return runResilientLoop("dxheat", pollDxHeat, pollIntervalMs);
 }
 
 async function pollSolar(): Promise<void> {
@@ -364,10 +371,7 @@ async function pollSolar(): Promise<void> {
 }
 
 async function runSolarPollingLoop(): Promise<void> {
-  while (true) {
-    await pollSolar();
-    await delay(solarPollIntervalMs);
-  }
+  return runResilientLoop("solar", pollSolar, solarPollIntervalMs);
 }
 
 async function persistPskReporterSummary(summary: PskReporterSummary): Promise<void> {
@@ -430,10 +434,7 @@ async function pollActivations(): Promise<void> {
 }
 
 async function runActivationPollingLoop(): Promise<void> {
-  while (true) {
-    await pollActivations();
-    await delay(activationPollIntervalMs);
-  }
+  return runResilientLoop("activations", pollActivations, activationPollIntervalMs);
 }
 
 async function persistSpot(parsedSpot: ParsedSpot, rawLine?: string): Promise<void> {
@@ -570,6 +571,27 @@ async function pruneRecentSortedSpots(): Promise<void> {
 async function pruneRecentActivations(): Promise<void> {
   const cutoff = Date.now() - recentActivationRetentionMs;
   await redis.zRemRangeByScore("activations:recent", 0, cutoff);
+}
+
+/**
+ * Runs `task` forever. A throwing task logs and waits for the next tick rather
+ * than terminating the loop, so a transient Redis or upstream failure cannot
+ * silently stop a data source for the lifetime of the process.
+ */
+async function runResilientLoop(
+  name: string,
+  task: () => Promise<void>,
+  intervalMs: number,
+): Promise<void> {
+  while (true) {
+    try {
+      await task();
+    } catch (error) {
+      console.error(`${name} poll failed; loop continues`, error);
+    }
+
+    await delay(intervalMs);
+  }
 }
 
 function delay(ms: number): Promise<void> {

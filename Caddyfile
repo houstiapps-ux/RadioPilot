@@ -1,0 +1,27 @@
+# SITE_ADDRESS is the public hostname, e.g. radiopilot.example.com.
+# Caddy provisions and renews TLS for it automatically.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# The API and its health check, same-origin with the app.
+	@api path /api/* /health
+	handle @api {
+		reverse_proxy api:8080
+	}
+
+	# Debug routes expose full scoring internals and raw spot data. They stay
+	# reachable for diagnosis, but behind credentials rather than open to anyone
+	# who guesses the path.
+	handle /debug/* {
+		basic_auth {
+			{$DEBUG_USER} {$DEBUG_PASSWORD_HASH}
+		}
+		reverse_proxy api:8080
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

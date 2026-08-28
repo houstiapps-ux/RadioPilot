@@ -21,7 +21,9 @@ interface SnapshotRedisClient {
 }
 
 export function startSnapshotLoop(redis: SnapshotRedisClient): void {
-  void runSnapshotLoop(redis);
+  void runSnapshotLoop(redis).catch((error: unknown) => {
+    console.error("Snapshot loop exited unexpectedly", error);
+  });
 }
 
 async function publishSnapshot(redis: SnapshotRedisClient): Promise<void> {
@@ -53,7 +55,12 @@ async function pruneRecentSortedSpots(
 
 async function runSnapshotLoop(redis: SnapshotRedisClient): Promise<void> {
   while (true) {
-    await publishSnapshot(redis);
+    try {
+      await publishSnapshot(redis);
+    } catch (error) {
+      console.error("Snapshot publish failed; loop continues", error);
+    }
+
     await delay(SNAPSHOT_INTERVAL_MS);
   }
 }

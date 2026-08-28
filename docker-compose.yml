@@ -1,0 +1,90 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Spots, PSK windows and DX baselines are all rebuildable from upstream, so
+    # persistence here is a convenience across restarts, not a source of truth.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["pnpm", "--filter", "@radio-pilot/worker", "start"]
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      SPOT_SOURCE: ${SPOT_SOURCE:-dxheat}
+      DX_CLUSTER_CALLSIGN: ${DX_CLUSTER_CALLSIGN:-}
+      HOME_GRID: ${HOME_GRID:-}
+      PSK_REFERENCE_GRID: ${PSK_REFERENCE_GRID:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
+    # The PSK Reporter subscription holds a rolling in-memory window. This bound
+    # is a backstop against the ingest buffer, which the retention cap in
+    # psk-reporter.ts is the primary defence for.
+    mem_limit: ${WORKER_MEM_LIMIT:-512m}
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS to your public hostname}
+      DEBUG_USER: ${DEBUG_USER:-radiopilot}
+      DEBUG_PASSWORD_HASH: ${DEBUG_PASSWORD_HASH:?run scripts/hash-debug-password.sh and set this}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
+volumes:
+  redis-data:
+  caddy-data:
+  caddy-config:

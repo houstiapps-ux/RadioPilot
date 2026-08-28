@@ -43,7 +43,6 @@ const opportunityStorage = new RedisOpportunityStorage(redis);
 
 let cachedOpportunityInputs:
   | {
-      readonly expiresAt: number;
       readonly value: OpportunityEngineInputs;
     }
   | null = null;
@@ -507,11 +506,7 @@ async function getCachedOpportunityInputs(): Promise<OpportunityEngineInputs> {
 
   triggerOpportunityInputsRefresh(now);
 
-  try {
-    return await cachedOpportunityInputsPending!;
-  } finally {
-    cachedOpportunityInputsPending = null;
-  }
+  return cachedOpportunityInputsPending!;
 }
 
 function triggerOpportunityInputsRefresh(now: number): void {
@@ -519,17 +514,26 @@ function triggerOpportunityInputsRefresh(now: number): void {
     return;
   }
 
-  cachedOpportunityInputsPending = loadOpportunityInputs(now)
+  const pending = loadOpportunityInputs(now)
     .then((value) => {
       cachedOpportunityInputs = {
         value,
-        expiresAt: value.now + FILTER_CACHE_MAX_STALE_MS,
       };
       return value;
     })
     .finally(() => {
-      cachedOpportunityInputsPending = null;
+      if (cachedOpportunityInputsPending === pending) {
+        cachedOpportunityInputsPending = null;
+      }
     });
+
+  cachedOpportunityInputsPending = pending;
+  // Background refreshes are started and not awaited on the stale-serving path.
+  // Without this the first failed refresh is an unhandled rejection and the
+  // process exits during exactly the blip the stale cache exists to ride out.
+  void pending.catch((error: unknown) => {
+    console.error("Opportunity input refresh failed; serving cached inputs", error);
+  });
 }
 
 async function loadOpportunityInputs(now: number): Promise<OpportunityEngineInputs> {

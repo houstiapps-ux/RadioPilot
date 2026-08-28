@@ -7,6 +7,7 @@ const COMMON_APPEARANCE_COUNT = 48;
 
 export interface DxBaselineRedisClient {
   hGet(key: string, field: string): Promise<string | null>;
+  hmGet(key: string, fields: string[]): Promise<Array<string | null>>;
   hIncrBy(key: string, field: string, increment: number): Promise<number>;
   expire(key: string, seconds: number): Promise<number>;
 }
@@ -191,9 +192,28 @@ async function loadCounterMap(
 ): Promise<Record<string, number>> {
   const result: Record<string, number> = {};
 
-  await Promise.all(fields.map(async (field) => {
-    result[field] = await readCountAcrossKeys(redis, keys, field);
-  }));
+  if (fields.length === 0) {
+    return result;
+  }
+
+  for (const field of fields) {
+    result[field] = 0;
+  }
+
+  // One HMGET per bucket, rather than one HGET per bucket per field. With 24
+  // buckets and a few hundred callsigns that is the difference between 24 and
+  // several thousand round-trips on every refresh.
+  const bucketValues = await Promise.all(keys.map((key) => redis.hmGet(key, [...fields])));
+
+  for (const values of bucketValues) {
+    for (let index = 0; index < fields.length; index += 1) {
+      const parsed = Number.parseInt(values[index] ?? "0", 10);
+
+      if (Number.isFinite(parsed)) {
+        result[fields[index]] += parsed;
+      }
+    }
+  }
 
   return result;
 }

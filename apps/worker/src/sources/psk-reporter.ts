@@ -16,6 +16,8 @@ const reconnectPeriodMs = 5_000;
 const diagnosticsIntervalMs = 5_000;
 const mockReportIntervalMs = 200;
 const parserWatchdogWindowMs = 60_000;
+const maxRetainedReports = 100_000;
+const FUTURE_OBSERVED_AT_TOLERANCE_MS = 60_000;
 
 type PskReporterRecord = Record<string, unknown>;
 const supportedBands: readonly Band[] = [
@@ -301,8 +303,17 @@ async function flushSummary(
   options: PskReporterMqttOptions,
 ): Promise<void> {
   const now = Date.now();
-  pruneReports(recentReports, now, windowMinutes);
+  const droppedToCap = pruneReports(recentReports, now, windowMinutes);
   pruneRecentMessageTimes(diagnostics.recentMessageTimes, now);
+
+  if (droppedToCap > 0) {
+    incrementDiscardReason(diagnostics, "retention_cap_exceeded");
+    options.onDiagnostic?.("psk-retention-cap", {
+      droppedReports: droppedToCap,
+      retainedReports: recentReports.length,
+      maxRetainedReports,
+    });
+  }
   updateParserWatchdog(diagnostics, now, options);
 
   options.onDiagnostic?.("psk-message-stats", {
@@ -855,31 +866,48 @@ function summarizeReportsByBand(
 }
 
 function latestObservedAt(reports: readonly PskReporterReport[]): string | undefined {
-  const timestamps = reports
-    .map((report) => Date.parse(report.observedAt))
-    .filter((value) => Number.isFinite(value));
+  // Reduced rather than spread into Math.max: the retained buffer routinely
+  // holds far more entries than the argument limit a spread would hit.
+  let latest = Number.NEGATIVE_INFINITY;
 
-  if (timestamps.length === 0) {
-    return undefined;
+  for (const report of reports) {
+    const observedAt = Date.parse(report.observedAt);
+
+    if (Number.isFinite(observedAt) && observedAt > latest) {
+      latest = observedAt;
+    }
   }
 
-  return new Date(Math.max(...timestamps)).toISOString();
+  return Number.isFinite(latest) ? new Date(latest).toISOString() : undefined;
 }
 
 function pruneReports(
   reports: PskReporterReport[],
   now: number,
   windowMinutes: number,
-): void {
+): number {
   const retentionCutoff = now - (windowMinutes * 2 * 60 * 1_000);
+  // A report timestamped far in the future would otherwise never age out and
+  // would pin the reported freshness forever.
+  const futureCutoff = now + FUTURE_OBSERVED_AT_TOLERANCE_MS;
 
   for (let index = reports.length - 1; index >= 0; index -= 1) {
     const observedAt = Date.parse(reports[index]?.observedAt ?? "");
 
-    if (!Number.isFinite(observedAt) || observedAt < retentionCutoff) {
+    if (!Number.isFinite(observedAt) || observedAt < retentionCutoff || observedAt > futureCutoff) {
       reports.splice(index, 1);
     }
   }
+
+  // Backstop against an unbounded buffer: retention is time-based, but inbound
+  // volume is not ours to control. Drops oldest-arrived first.
+  if (reports.length > maxRetainedReports) {
+    const overflow = reports.length - maxRetainedReports;
+    reports.splice(0, overflow);
+    return overflow;
+  }
+
+  return 0;
 }
 
 function pruneRecentMessageTimes(messageTimes: number[], now: number): void {

@@ -164,7 +164,9 @@ type DevReviewData = {
 type LoadState = "loading" | "success" | "error";
 type PanelTone = "best" | "watch" | "dx" | "nearby";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+// Empty string keeps every request same-origin, which is how the app is served
+// behind Caddy. An unset variable used to produce "undefined/api/opportunities".
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const opportunitiesUrl = `${API_BASE_URL}/api/opportunities`;
 const debugOpportunitiesUrl = `${API_BASE_URL}/debug/opportunities`;
 const debugBandsUrl = `${API_BASE_URL}/debug/bands`;

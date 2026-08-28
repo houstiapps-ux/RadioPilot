@@ -232,8 +232,13 @@ async function loadDxEvents(
     return [];
   }
 
+  const hGet = redisClient.hGet.bind(redisClient);
+
   return detectDxEvents(spots, {
-    hGet: redisClient.hGet.bind(redisClient),
+    hGet,
+    async hmGet(key: string, fields: string[]) {
+      return Promise.all(fields.map((field) => hGet(key, field)));
+    },
     async hIncrBy() {
       return 0;
     },

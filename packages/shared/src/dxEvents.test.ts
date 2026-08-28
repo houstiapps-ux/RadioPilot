@@ -19,6 +19,9 @@ test("detects rare high-interest DX activity from recent spots", async () => {
     async hGet() {
       return null;
     },
+    async hmGet(_key: string, fields: string[]) {
+      return fields.map(() => null);
+    },
     async hIncrBy() {
       return 0;
     },

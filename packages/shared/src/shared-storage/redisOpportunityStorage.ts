@@ -14,6 +14,7 @@ export interface RedisLikeClient {
   get(key: string): Promise<string | null>;
   zRangeByScore(key: string, min: number, max: number): Promise<string[]>;
   hGet(key: string, field: string): Promise<string | null>;
+  hmGet(key: string, fields: string[]): Promise<Array<string | null>>;
   hIncrBy(key: string, field: string, increment: number): Promise<number>;
   expire(key: string, seconds: number): Promise<number>;
 }
